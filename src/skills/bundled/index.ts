@@ -1,0 +1,37 @@
+import { registerBatchSkill } from './batch.js'
+import { registerDebugSkill } from './debug.js'
+import { registerKeybindingsSkill } from './keybindings.js'
+import { registerLoremIpsumSkill } from './loremIpsum.js'
+import { registerRememberSkill } from './remember.js'
+import { registerSimplifySkill } from './simplify.js'
+import { registerSkillifySkill } from './skillify.js'
+import { registerStuckSkill } from './stuck.js'
+import { registerUltracodeSkill } from './ultracode.js'
+import { registerCronDeleteSkill, registerCronListSkill } from './cronManage.js'
+import { registerLoopSkill } from './loop.js'
+import { registerVerifySkill } from './verify.js'
+
+/**
+ * Initialize all bundled skills.
+ * Called at startup to register skills that ship with the CLI.
+ *
+ * To add a new bundled skill:
+ * 1. Create a new file in src/skills/bundled/ (e.g., myskill.ts)
+ * 2. Export a register function that calls registerBundledSkill()
+ * 3. Import and call that function here
+ */
+export function initBundledSkills(): void {
+  registerKeybindingsSkill()
+  registerVerifySkill()
+  registerDebugSkill()
+  registerLoremIpsumSkill()
+  registerSkillifySkill()
+  registerRememberSkill()
+  registerSimplifySkill()
+  registerBatchSkill()
+  registerStuckSkill()
+  registerUltracodeSkill()
+  registerLoopSkill()
+  registerCronListSkill()
+  registerCronDeleteSkill()
+}

@@ -1,0 +1,30 @@
+import * as React from 'react';
+import { BLACK_CIRCLE } from 'src/constants/figures.js';
+import { getModeColor } from 'src/utils/safety/ExecutionMode.js';
+import { Box, Text } from '@anthropic/ink';
+import type { ToolProgressData } from 'src/Tool.js';
+import type { ProgressMessage } from 'src/types/message.js';
+import type { ThemeName } from 'src/utils/theme.js';
+import type { Output } from './EnterPlanModeTool.js';
+
+export function renderToolUseMessage(): React.ReactNode {
+  return null;
+}
+
+export function renderToolResultMessage(
+  _output: Output,
+  _progressMessagesForMessage: ProgressMessage<ToolProgressData>[],
+  _options: { theme: ThemeName },
+): React.ReactNode {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="row">
+        <Text color={getModeColor('plan')}>{BLACK_CIRCLE}</Text>
+        <Text> Entered plan mode</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <Text dimColor>Sophia is now exploring and designing an implementation approach.</Text>
+      </Box>
+    </Box>
+  );
+}

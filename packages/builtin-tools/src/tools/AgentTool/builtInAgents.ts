@@ -1,0 +1,53 @@
+import { feature } from 'bun:bundle'
+import { getIsNonInteractiveSession } from 'src/bootstrap/state.js'
+import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
+import { isEnvTruthy } from 'src/utils/envUtils.js'
+import { SOPHIA_GUIDE_AGENT } from './built-in/sophiaGuideAgent.js'
+import { EXPLORE_AGENT } from './built-in/exploreAgent.js'
+import { WORKER_AGENT } from './built-in/workerAgent.js'
+import { PLAN_AGENT } from './built-in/planAgent.js'
+import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
+import type { AgentDefinition } from './loadAgentsDir.js'
+
+export function areExplorePlanAgentsEnabled(): boolean {
+  if (feature('BUILTIN_EXPLORE_PLAN_AGENTS')) {
+    return true
+  }
+  return false
+}
+
+export function getBuiltInAgents(): AgentDefinition[] {
+  // Allow disabling all built-in agents via env var (useful for SDK users who want a blank slate)
+  // Only applies in noninteractive mode (SDK/API usage)
+  if (
+    isEnvTruthy(process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS) &&
+    getIsNonInteractiveSession()
+  ) {
+    return []
+  }
+
+  const agents: AgentDefinition[] = [WORKER_AGENT]
+
+  if (areExplorePlanAgentsEnabled()) {
+    agents.push(EXPLORE_AGENT, PLAN_AGENT)
+  }
+
+  // Include Code Guide agent for non-SDK entrypoints
+  const isNonSdkEntrypoint =
+    process.env.SOPHIA_ENTRYPOINT !== 'sdk-ts' &&
+    process.env.SOPHIA_ENTRYPOINT !== 'sdk-py' &&
+    process.env.SOPHIA_ENTRYPOINT !== 'sdk-cli'
+
+  if (isNonSdkEntrypoint) {
+    agents.push(SOPHIA_GUIDE_AGENT)
+  }
+
+  if (
+    feature('VERIFICATION_AGENT') &&
+    getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)
+  ) {
+    agents.push(VERIFICATION_AGENT)
+  }
+
+  return agents
+}

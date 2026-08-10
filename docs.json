@@ -1,0 +1,33 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Sophia Agent",
+  "colors": {
+    "primary": "#D77757",
+    "light": "#F09573",
+    "dark": "#A84F36"
+  },
+  "favicon": "/docs/favicon.svg",
+  "navigation": [
+    {
+      "group": "Core",
+      "pages": [
+        "docs/core-profile",
+        "docs/repository-organization",
+        "docs/explicit-setup",
+        "docs/external-dependencies"
+      ]
+    }
+  ],
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Arain119/SophiaAgent"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Arain119/SophiaAgent"
+    }
+  }
+}

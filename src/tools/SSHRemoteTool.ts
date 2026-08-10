@@ -1,0 +1,668 @@
+import { createHash } from 'node:crypto'
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
+import { homedir, platform, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { z } from 'zod/v4'
+import type { ToolResultBlockParam } from '../Tool.js'
+import { buildTool } from '../Tool.js'
+import { lazySchema } from '../utils/lazySchema.js'
+
+const inputSchema = lazySchema(() =>
+  z
+    .strictObject({
+      action: z
+        .enum([
+          'save',
+          'list',
+          'status',
+          'execute',
+          'test',
+          'remove',
+          'disconnect',
+        ])
+        .describe('Connection operation.'),
+      name: z
+        .string()
+        .regex(/^[A-Za-z0-9._-]+$/)
+        .max(64)
+        .optional()
+        .describe('Saved connection name.'),
+      host: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('SSH host, optionally in user@host form.'),
+      command: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Shell command to execute on the remote host.'),
+      cwd: z.string().optional().describe('Remote working directory.'),
+      port: z.number().int().min(1).max(65535).optional().describe('SSH port.'),
+      identityFile: z
+        .string()
+        .optional()
+        .describe(
+          'Path to a local private key file. The key contents never enter the model context.',
+        ),
+      password: z
+        .string()
+        .min(1)
+        .max(4096)
+        .refine(value => !/[\r\n]/.test(value), 'password must be one line')
+        .optional()
+        .describe(
+          'SSH password supplied by the user. It is reused in memory for this Sophia process, but not saved in connection profiles or returned by the tool.',
+        ),
+      timeoutMs: z
+        .number()
+        .int()
+        .min(1000)
+        .max(600_000)
+        .optional()
+        .describe('Command timeout in milliseconds.'),
+    })
+    .superRefine((input, context) => {
+      const needsName = input.action === 'save' || input.action === 'remove'
+      if (needsName && !input.name) {
+        context.addIssue({
+          code: 'custom',
+          message: `${input.action} requires name`,
+          path: ['name'],
+        })
+      }
+      if (input.action === 'save' && !input.host) {
+        context.addIssue({
+          code: 'custom',
+          message: 'save requires host',
+          path: ['host'],
+        })
+      }
+      if (input.action === 'execute' && !input.command) {
+        context.addIssue({
+          code: 'custom',
+          message: 'execute requires command',
+          path: ['command'],
+        })
+      }
+      if (
+        ['execute', 'test', 'disconnect'].includes(input.action) &&
+        !input.name &&
+        !input.host
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: `${input.action} requires name or host`,
+          path: ['name'],
+        })
+      }
+    }),
+)
+
+type InputSchema = ReturnType<typeof inputSchema>
+type Input = z.infer<InputSchema>
+type Output = { stdout: string; stderr: string; exitCode: number }
+type Connection = {
+  host: string
+  port?: number
+  identityFile?: string
+  password?: string
+}
+type ConnectionLifecycleState = {
+  state: 'disconnected' | 'connecting' | 'ready' | 'degraded' | 'blocked'
+  host: string
+  port: number
+  lastSuccessAt?: number
+  lastFailureAt?: number
+  failureCount: number
+  nextRetryAt?: number
+  lastError?: string
+}
+
+const CONTROL_DIR = join(tmpdir(), 'sophia-agent-ssh')
+const CONNECTIONS_FILE = join(homedir(), '.sophia', 'ssh', 'connections.json')
+const connectionPaths = new Map<string, string>()
+const sessionPasswords = new Map<string, string>()
+const connectionStates = new Map<string, ConnectionLifecycleState>()
+const connectionProbeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const SSH_PROBE_RETRY_DELAY_MS = 30 * 60 * 1000
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function parseSshHost(value: string): { host: string; port?: number } {
+  const trimmed = value.trim()
+  const commandMatch = trimmed.match(/^ssh\s+(?:-p\s+(\d+)\s+)?([^\s]+)$/i)
+  if (commandMatch) {
+    return {
+      host: commandMatch[2]!,
+      ...(commandMatch[1] ? { port: Number(commandMatch[1]) } : {}),
+    }
+  }
+  if (trimmed.startsWith('ssh://')) {
+    const parsed = new URL(trimmed)
+    return {
+      host: parsed.username
+        ? `${parsed.username}@${parsed.hostname}`
+        : parsed.hostname,
+      ...(parsed.port ? { port: Number(parsed.port) } : {}),
+    }
+  }
+  return { host: trimmed }
+}
+
+async function readConnections(): Promise<Record<string, Connection>> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(CONNECTIONS_FILE, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    const connections: Record<string, Connection> = {}
+    for (const [name, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const candidate = value as Record<string, unknown>
+      if (typeof candidate.host !== 'string' || candidate.host.length === 0) {
+        continue
+      }
+      connections[name] = {
+        host: candidate.host,
+        ...(typeof candidate.port === 'number' && { port: candidate.port }),
+        ...(typeof candidate.identityFile === 'string' && {
+          identityFile: candidate.identityFile,
+        }),
+      }
+    }
+    return connections
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return {}
+    }
+    throw error
+  }
+}
+
+async function writeConnections(
+  connections: Record<string, Connection>,
+): Promise<void> {
+  await mkdir(dirname(CONNECTIONS_FILE), { recursive: true })
+  const temporaryFile = `${CONNECTIONS_FILE}.${process.pid}.tmp`
+  await writeFile(temporaryFile, `${JSON.stringify(connections, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  await rename(temporaryFile, CONNECTIONS_FILE)
+  await chmod(CONNECTIONS_FILE, 0o600).catch(() => {})
+}
+
+async function resolveConnection(input: Input): Promise<Connection> {
+  const saved = input.name ? (await readConnections())[input.name] : undefined
+  if (input.name && !saved) {
+    throw new Error(`SSH connection "${input.name}" was not found`)
+  }
+  const rawHost = input.host ?? saved?.host
+  if (!rawHost) throw new Error('SSH host is required')
+  const parsedHost = parseSshHost(rawHost)
+  const host = parsedHost.host
+  const port = input.port ?? parsedHost.port ?? saved?.port
+  return {
+    host,
+    port,
+    identityFile: input.identityFile ?? saved?.identityFile,
+    password:
+      input.password ?? sessionPasswords.get(passwordKey({ host, port })),
+  }
+}
+
+function connectionKey(connection: Connection): string {
+  return `${connection.host}\0${connection.port ?? 22}\0${connection.identityFile ?? join(homedir(), '.ssh', 'default')}`
+}
+
+function passwordKey(connection: Pick<Connection, 'host' | 'port'>): string {
+  return `${connection.host}\0${connection.port ?? 22}`
+}
+
+function authenticationFailed(output: Output): boolean {
+  return /permission denied|authentication failed|too many authentication failures/i.test(
+    output.stderr,
+  )
+}
+
+function connectionFailed(output: Output): boolean {
+  return (
+    output.exitCode !== 0 &&
+    /connection (closed|refused|reset|timed out)|could not resolve|no route to host|broken pipe|control socket connect/i.test(
+      `${output.stderr}\n${output.stdout}`,
+    )
+  )
+}
+
+function publicError(output: Output): string {
+  return (
+    output.stderr ||
+    output.stdout ||
+    `SSH exited with code ${output.exitCode}`
+  )
+    .trim()
+    .slice(0, 500)
+}
+
+function updateConnectionState(
+  connection: Connection,
+  state: ConnectionLifecycleState['state'],
+  output?: Output,
+): void {
+  const key = connectionKey(connection)
+  const previous = connectionStates.get(key)
+  const now = Date.now()
+  const failed = state === 'degraded' || state === 'blocked'
+  connectionStates.set(key, {
+    state,
+    host: connection.host,
+    port: connection.port ?? 22,
+    failureCount: failed ? (previous?.failureCount ?? 0) + 1 : 0,
+    lastSuccessAt: state === 'ready' ? now : previous?.lastSuccessAt,
+    lastFailureAt: failed ? now : previous?.lastFailureAt,
+    nextRetryAt: failed ? now + SSH_PROBE_RETRY_DELAY_MS : undefined,
+    lastError: failed && output ? publicError(output) : undefined,
+  })
+  if (state === 'ready' || state === 'disconnected' || state === 'blocked') {
+    const timer = connectionProbeTimers.get(key)
+    if (timer) clearTimeout(timer)
+    connectionProbeTimers.delete(key)
+  }
+}
+
+function scheduleConnectionProbe(
+  connection: Connection,
+  controlPath: string,
+): void {
+  const key = connectionKey(connection)
+  if (connectionProbeTimers.has(key)) return
+  const timer = setTimeout(() => {
+    connectionProbeTimers.delete(key)
+    void (async () => {
+      await unlink(controlPath).catch(() => {})
+      const output = await spawnSsh(
+        [...sshArgs(connection, controlPath), connection.host, 'true'],
+        15_000,
+        connection.password,
+      ).catch(error => ({
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+      }))
+      if (output.exitCode === 0) {
+        connectionPaths.set(key, controlPath)
+        updateConnectionState(connection, 'ready')
+      } else if (authenticationFailed(output)) {
+        updateConnectionState(connection, 'blocked', output)
+      } else {
+        updateConnectionState(connection, 'degraded', output)
+        scheduleConnectionProbe(connection, controlPath)
+      }
+    })()
+  }, SSH_PROBE_RETRY_DELAY_MS)
+  timer.unref?.()
+  connectionProbeTimers.set(key, timer)
+}
+
+function formatConnectionState(state: ConnectionLifecycleState): string {
+  return JSON.stringify({
+    host: state.host,
+    port: state.port,
+    state: state.state,
+    failureCount: state.failureCount,
+    lastSuccessAt: state.lastSuccessAt
+      ? new Date(state.lastSuccessAt).toISOString()
+      : undefined,
+    lastFailureAt: state.lastFailureAt
+      ? new Date(state.lastFailureAt).toISOString()
+      : undefined,
+    nextRetryAt: state.nextRetryAt
+      ? new Date(state.nextRetryAt).toISOString()
+      : undefined,
+    lastError: state.lastError,
+  })
+}
+
+function sshArgs(connection: Connection, controlPath: string): string[] {
+  const args = [
+    'ssh',
+    '-o',
+    `BatchMode=${connection.password ? 'no' : 'yes'}`,
+    '-o',
+    'StrictHostKeyChecking=accept-new',
+    '-o',
+    'ConnectTimeout=10',
+    '-o',
+    'ControlMaster=auto',
+    '-o',
+    'ControlPersist=300',
+    '-o',
+    `ControlPath=${controlPath}`,
+  ]
+  if (connection.port !== undefined) {
+    args.push('-p', String(connection.port))
+  }
+  if (connection.identityFile !== undefined) {
+    args.push('-i', connection.identityFile)
+  }
+  if (connection.password !== undefined) {
+    args.push(
+      '-o',
+      'PreferredAuthentications=keyboard-interactive,password',
+      '-o',
+      'NumberOfPasswordPrompts=1',
+    )
+  }
+  return args
+}
+
+async function spawnSsh(
+  args: string[],
+  timeoutMs: number,
+  password?: string,
+): Promise<Output> {
+  let askpassPath: string | undefined
+  if (password) {
+    await mkdir(CONTROL_DIR, { recursive: true })
+    const isWindows = platform() === 'win32'
+    askpassPath = join(
+      CONTROL_DIR,
+      `askpass-${process.pid}-${crypto.randomUUID()}${isWindows ? '.cmd' : '.sh'}`,
+    )
+    const helper = isWindows
+      ? '@echo off\r\npowershell.exe -NoProfile -NonInteractive -Command "[Console]::Out.Write($env:SOPHIA_SSH_PASSWORD)"\r\n'
+      : '#!/bin/sh\nprintf "%s" "$SOPHIA_SSH_PASSWORD"\n'
+    await writeFile(askpassPath, helper, {
+      encoding: 'utf8',
+      mode: 0o700,
+    })
+    await chmod(askpassPath, 0o700).catch(() => {})
+  }
+  const proc = Bun.spawn(args, {
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    ...(password
+      ? {
+          env: {
+            ...process.env,
+            SSH_ASKPASS: askpassPath!,
+            SSH_ASKPASS_REQUIRE: 'force',
+            DISPLAY: 'sophia',
+            SOPHIA_SSH_PASSWORD: password,
+          },
+        }
+      : {}),
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]).then(([stdout, stderr, exitCode]) => ({
+        stdout,
+        stderr,
+        exitCode,
+      })),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          proc.kill()
+          reject(new Error(`SSH command timed out after ${timeoutMs}ms`))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (askpassPath)
+      await Bun.file(askpassPath)
+        .delete()
+        .catch(() => {})
+  }
+}
+
+async function runRemoteCommand(input: Input): Promise<Output> {
+  const connection = await resolveConnection(input)
+  await mkdir(CONTROL_DIR, { recursive: true })
+  const key = connectionKey(connection)
+  const controlPath =
+    connectionPaths.get(key) ??
+    join(
+      CONTROL_DIR,
+      createHash('sha256').update(key).digest('hex').slice(0, 32),
+    )
+  connectionPaths.set(key, controlPath)
+  const args = sshArgs(connection, controlPath)
+  const timeoutMs = input.timeoutMs ?? 120_000
+
+  if (input.action === 'disconnect') {
+    connectionPaths.delete(key)
+    const output = await spawnSsh(
+      [...args, '-O', 'exit', connection.host],
+      Math.min(timeoutMs, 15_000),
+      connection.password,
+    )
+    updateConnectionState(connection, 'disconnected')
+    return output
+  }
+
+  const command = input.action === 'test' ? 'true' : input.command
+  if (!command) throw new Error('SSH command is required')
+  const remoteCommand = input.cwd
+    ? `cd -- ${shellQuote(input.cwd)} && ${command}`
+    : command
+  updateConnectionState(connection, 'connecting')
+  let output = await spawnSsh(
+    [...args, connection.host, remoteCommand],
+    timeoutMs,
+    connection.password,
+  )
+  if (input.action === 'test' && connectionFailed(output)) {
+    await unlink(controlPath).catch(() => {})
+    for (const delayMs of [500, 1500]) {
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+      output = await spawnSsh(
+        [...args, connection.host, remoteCommand],
+        timeoutMs,
+        connection.password,
+      )
+      if (!connectionFailed(output)) break
+      await unlink(controlPath).catch(() => {})
+    }
+  }
+  if (input.password && !authenticationFailed(output)) {
+    sessionPasswords.set(passwordKey(connection), input.password)
+  }
+  if (output.exitCode === 0) updateConnectionState(connection, 'ready')
+  else if (authenticationFailed(output))
+    updateConnectionState(connection, 'blocked', output)
+  else if (connectionFailed(output)) {
+    connectionPaths.delete(key)
+    await unlink(controlPath).catch(() => {})
+    updateConnectionState(connection, 'degraded', output)
+    scheduleConnectionProbe(connection, controlPath)
+  }
+  return output
+}
+
+async function call(input: Input): Promise<Output> {
+  if (input.action === 'list') {
+    const connections = await readConnections()
+    const lines = Object.entries(connections).map(
+      ([name, connection]) =>
+        `${name}: ${connection.host}${connection.port ? `:${connection.port}` : ''}${connection.identityFile ? ` (key: ${connection.identityFile})` : ''}`,
+    )
+    return {
+      stdout:
+        lines.length > 0
+          ? `${lines.join('\n')}\n`
+          : 'No saved SSH connections.\n',
+      stderr: '',
+      exitCode: 0,
+    }
+  }
+
+  if (input.action === 'status') {
+    if (input.name || input.host) {
+      const connection = await resolveConnection(input)
+      const state = connectionStates.get(connectionKey(connection)) ?? {
+        state: 'disconnected' as const,
+        host: connection.host,
+        port: connection.port ?? 22,
+        failureCount: 0,
+      }
+      return {
+        stdout: `${formatConnectionState(state)}\n`,
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    const states = [...connectionStates.values()].map(formatConnectionState)
+    return {
+      stdout: states.length
+        ? `${states.join('\n')}\n`
+        : 'No active SSH connection state.\n',
+      stderr: '',
+      exitCode: 0,
+    }
+  }
+
+  if (input.action === 'save') {
+    const connections = await readConnections()
+    const name = input.name!
+    connections[name] = {
+      host: input.host!,
+      ...(input.port !== undefined && { port: input.port }),
+      ...(input.identityFile !== undefined && {
+        identityFile: input.identityFile,
+      }),
+    }
+    await writeConnections(connections)
+    if (input.password) {
+      const parsedHost = parseSshHost(input.host!)
+      sessionPasswords.set(
+        passwordKey({
+          host: parsedHost.host,
+          port: input.port ?? parsedHost.port,
+        }),
+        input.password,
+      )
+    }
+    return {
+      stdout: `Saved SSH connection "${name}".\n`,
+      stderr: '',
+      exitCode: 0,
+    }
+  }
+
+  if (input.action === 'remove') {
+    const connections = await readConnections()
+    const name = input.name!
+    if (!connections[name]) {
+      throw new Error(`SSH connection "${name}" was not found`)
+    }
+    const removed = connections[name]!
+    delete connections[name]
+    const parsedHost = parseSshHost(removed.host)
+    sessionPasswords.delete(
+      passwordKey({
+        host: parsedHost.host,
+        port: parsedHost.port ?? removed.port,
+      }),
+    )
+    for (const [key, state] of connectionStates) {
+      if (
+        state.host === parsedHost.host &&
+        state.port === (parsedHost.port ?? removed.port ?? 22)
+      ) {
+        connectionStates.delete(key)
+        connectionPaths.delete(key)
+        const timer = connectionProbeTimers.get(key)
+        if (timer) clearTimeout(timer)
+        connectionProbeTimers.delete(key)
+      }
+    }
+    await writeConnections(connections)
+    return {
+      stdout: `Removed SSH connection "${name}".\n`,
+      stderr: '',
+      exitCode: 0,
+    }
+  }
+
+  return runRemoteCommand(input)
+}
+
+export const SSHRemoteTool = buildTool({
+  name: 'SSHRemote',
+  maxResultSizeChars: 100_000,
+  strict: true,
+  get inputSchema(): ReturnType<typeof inputSchema> {
+    return inputSchema()
+  },
+  async description() {
+    return 'Save, reuse, inspect, and operate SSH connections with the local OpenSSH client.'
+  },
+  async prompt() {
+    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. A successfully used password is automatically reused in memory for later connections during this Sophia process; do not save it in connection profiles or repeat it in output. Save named connections only for reusable host/key settings; prefer the local SSH agent or private-key path when available.'
+  },
+  renderToolUseMessage(input: Partial<Input>) {
+    const target = input.name ?? input.host ?? ''
+    return `SSH ${input.action ?? ''} ${target}${input.command ? `: ${input.command}` : ''}`.trim()
+  },
+  async call(input: Input) {
+    try {
+      return { data: await call(input) }
+    } catch (error) {
+      return {
+        data: {
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+          exitCode: 1,
+        },
+      }
+    }
+  },
+  isConcurrencySafe() {
+    return false
+  },
+  isReadOnly(input: Input) {
+    if (
+      input.action === 'list' ||
+      input.action === 'status' ||
+      input.action === 'test'
+    )
+      return true
+    if (input.action !== 'execute' || !input.command) return false
+    return /^(cat|cd|df|du|echo|env|find|git\s+(diff|log|status)|head|ls|pwd|stat|tail|uname|whoami|which|grep|rg|sed\s+-n)\b/i.test(
+      input.command.trim(),
+    )
+  },
+  isDestructive() {
+    return true
+  },
+  mapToolResultToToolResultBlockParam(
+    data: Output,
+    toolUseID: string,
+  ): ToolResultBlockParam {
+    const parts = [`exit code: ${data.exitCode}`]
+    if (data.stdout) parts.push(`stdout:\n${data.stdout}`)
+    if (data.stderr) parts.push(`stderr:\n${data.stderr}`)
+    return {
+      tool_use_id: toolUseID,
+      type: 'tool_result',
+      content: parts.join('\n\n'),
+    }
+  },
+})

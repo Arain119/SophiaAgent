@@ -1,0 +1,45 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "types": ["bun"],
+    "paths": {
+      "src/*": ["./src/*"],
+      "@anthropic/ink": ["./packages/@ant/ink/src/index.ts"],
+      "@ant/model-provider": ["./packages/@ant/model-provider/src/index.ts"],
+      "@ant/model-provider/*": [
+        "./packages/@ant/model-provider/src/*/index.ts"
+      ],
+      "@sophia-agent/builtin-tools/*": ["./packages/builtin-tools/src/*"],
+      "@sophia-agent/builtin-tools": ["./packages/builtin-tools/src/index.ts"],
+      "@sophia-agent/mcp-client/*": ["./packages/mcp-client/src/*"],
+      "@sophia-agent/mcp-client": ["./packages/mcp-client/src/index.ts"],
+      "@sophia-agent/agent-tools/*": ["./packages/agent-tools/src/*"],
+      "@sophia-agent/agent-tools": ["./packages/agent-tools/src/index.ts"],
+      "@sophia-agent/workflow-engine/*": ["./packages/workflow-engine/src/*"],
+      "@sophia-agent/workflow-engine": [
+        "./packages/workflow-engine/src/index.ts"
+      ],
+      "color-diff-napi": ["./packages/color-diff-napi/src/index.ts"],
+      "image-processor-napi": ["./packages/image-processor-napi/src/index.ts"],
+      "modifiers-napi": ["./packages/modifiers-napi/src/index.ts"],
+      "url-handler-napi": ["./packages/url-handler-napi/src/index.ts"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx"
+  ],
+  "exclude": ["node_modules"]
+}

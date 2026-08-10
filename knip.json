@@ -1,0 +1,30 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["src/entrypoints/cli.tsx", "src/entrypoints/agentSdkTypes.ts"],
+  "project": ["src/**/*.{ts,tsx}"],
+  "ignore": [
+    "src/types/**",
+    "src/**/*.d.ts",
+    "src/entrypoints/agentSdkTypes.ts",
+    "src/entrypoints/sdk/controlTypes.ts",
+    "src/entrypoints/sdk/runtimeTypes.ts"
+  ],
+  "ignoreDependencies": [
+    "@ant/*",
+    "react-compiler-runtime",
+    "@anthropic-ai/mcpb",
+    "@anthropic-ai/sandbox-runtime",
+    "bundle",
+    "undici"
+  ],
+  "ignoreBinaries": ["bun", "caffeinate", "wslpath"],
+  "workspaces": {
+    "packages/*": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/@ant/*": {
+      "ignore": ["**"]
+    }
+  }
+}

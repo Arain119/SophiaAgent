@@ -1,0 +1,2038 @@
+import { feature } from 'bun:bundle';
+import * as path from 'path';
+import * as React from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useNotifications } from 'src/context/notifications.js';
+import { useCommandQueue } from 'src/hooks/useCommandQueue.js';
+import { type IDEAtMentioned, useIdeAtMentioned } from 'src/hooks/useIdeAtMentioned.js';
+import { logEvent } from 'src/services/analytics/index.js';
+import { useAppState, useAppStateStore, useSetAppState } from 'src/state/AppState.js';
+import type { FooterItem } from 'src/state/AppStateStore.js';
+import { getCwd } from 'src/utils/cwd.js';
+import { isQueuedCommandEditable, popAllEditable } from 'src/utils/messageQueueManager.js';
+import stripAnsi from 'strip-ansi';
+import { getNativeCSIuTerminalDisplayName } from '../../commands/terminalSetup/terminalSetup.js';
+import { type Command, hasCommand } from '../../commands.js';
+import { useIsModalOverlayActive } from '../../context/overlayContext.js';
+import { useSetPromptOverlayDialog } from '../../context/promptOverlayContext.js';
+import { formatImageRef, formatPastedTextRef, getPastedTextRefNumLines, parseReferences } from '../../history.js';
+import type { VerificationStatus } from '../../hooks/useApiKeyVerification.js';
+import { type HistoryMode, useArrowKeyHistory } from '../../hooks/useArrowKeyHistory.js';
+import { useBackgroundAgentTasks } from '../../hooks/useBackgroundAgentTasks.js';
+import { useDoublePress } from '../../hooks/useDoublePress.js';
+import { useHistorySearch } from '../../hooks/useHistorySearch.js';
+import type { IDESelection } from '../../hooks/useIdeSelection.js';
+import { useInputBuffer } from '../../hooks/useInputBuffer.js';
+import { useMainLoopModel } from '../../hooks/useMainLoopModel.js';
+import { useTerminalSize } from '../../hooks/useTerminalSize.js';
+import { useTypeahead } from '../../hooks/useTypeahead.js';
+import { Box, type ClickEvent, type Key, stringWidth, Text, useInput } from '@anthropic/ink';
+import { useOptionalKeybindingContext } from '../../keybindings/KeybindingContext.js';
+import { getShortcutDisplay } from '../../keybindings/shortcutFormat.js';
+import { useKeybinding, useKeybindings } from '../../keybindings/useKeybinding.js';
+import type { MCPServerConnection } from '../../services/mcp/types.js';
+import { getActiveAgentForInput, getViewedTeammateTask } from '../../state/selectors.js';
+import { enterTeammateView, exitTeammateView, stopOrDismissAgent } from '../../state/teammateViewHelpers.js';
+import type { ToolSafetyContext } from '../../Tool.js';
+import { getRunningTeammatesSorted } from '../../tasks/InProcessTeammateTask/InProcessTeammateTask.js';
+import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js';
+import { isPanelAgentTask, type LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { isBackgroundTask } from '../../tasks/types.js';
+import {
+  AGENT_COLOR_TO_THEME_COLOR,
+  AGENT_COLORS,
+  type AgentColorName,
+} from '@sophia-agent/builtin-tools/tools/AgentTool/agentColorManager.js';
+import type { AgentDefinition } from '@sophia-agent/builtin-tools/tools/AgentTool/loadAgentsDir.js';
+import type { Message } from '../../types/message.js';
+import type { BaseTextInputProps, PromptInputMode, VimMode } from '../../types/textInputTypes.js';
+import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
+import { count } from '../../utils/array.js';
+import { Cursor } from '../../utils/Cursor.js';
+import { getGlobalConfig, type PastedContent, saveGlobalConfig } from '../../utils/config.js';
+import { logForDebugging } from '../../utils/debug.js';
+import { parseDirectMemberMessage, sendDirectMemberMessage } from '../../utils/directMemberMessage.js';
+import { env } from '../../utils/env.js';
+import { errorMessage } from '../../utils/errors.js';
+import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
+import type { PromptInputHelpers } from '../../utils/handlePromptSubmit.js';
+import { getImageFromClipboard, PASTE_THRESHOLD } from '../../utils/imagePaste.js';
+import type { ImageDimensions } from '../../utils/imageResizer.js';
+import { cacheImagePath, storeImage } from '../../utils/imageStore.js';
+import { isMacosOptionChar, MACOS_OPTION_SPECIAL_CHARS } from '../../utils/keyboardShortcuts.js';
+import { logError } from '../../utils/log.js';
+import { getPlatform } from '../../utils/platform.js';
+import type { ProcessUserInputContext } from '../../utils/processUserInput/processUserInput.js';
+import { editPromptInEditor } from '../../utils/promptEditor.js';
+import { findSlashCommandPositions } from '../../utils/suggestions/commandSuggestions.js';
+import {
+  findSlackChannelPositions,
+  getKnownChannelsVersion,
+  hasSlackMcpServer,
+  subscribeKnownChannels,
+} from '../../utils/suggestions/slackChannelSuggestions.js';
+import { isInProcessEnabled } from '../../utils/swarm/backends/registry.js';
+import type { TeamSummary } from '../../utils/teamDiscovery.js';
+import { writeToMailbox } from '../../utils/teammateMailbox.js';
+import type { TextHighlight } from '../../utils/textHighlighting.js';
+import type { Theme } from '../../utils/theme.js';
+import { findThinkingTriggerPositions, getRainbowColor, isUltrathinkEnabled } from '../../utils/thinking.js';
+import { findTokenBudgetPositions } from '../../utils/tokenBudget.js';
+// AutoModeOptInDialog removed — auto mode is available to all users
+import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
+import { getVisibleAgentTasks, useAgentTaskCount } from '../AgentTaskStatus.js';
+import { getEffortNotificationText } from '../EffortIndicator.js';
+import { GlobalSearchDialog } from '../GlobalSearchDialog.js';
+import { HistorySearchDialog } from '../HistorySearchDialog.js';
+import { QuickOpenDialog } from '../QuickOpenDialog.js';
+import TextInput from '../TextInput.js';
+import { ThinkingToggle } from '../ThinkingToggle.js';
+import { BackgroundTasksDialog } from '../tasks/BackgroundTasksDialog.js';
+import { shouldHideTasksFooter } from '../tasks/taskStatusUtils.js';
+import { AgentsDialog } from '../teams/TeamsDialog.js';
+import VimTextInput from '../VimTextInput.js';
+import { getModeFromInput, getValueFromInput } from './inputModes.js';
+import { FOOTER_TEMPORARY_STATUS_TIMEOUT, Notifications } from './Notifications.js';
+import PromptInputFooter from './PromptInputFooter.js';
+import type { SuggestionItem } from './PromptInputFooterSuggestions.js';
+import { PromptInputModeIndicator } from './PromptInputModeIndicator.js';
+import { PromptInputQueuedCommands } from './PromptInputQueuedCommands.js';
+import { PromptInputStashNotice } from './PromptInputStashNotice.js';
+import { useMaybeTruncateInput } from './useMaybeTruncateInput.js';
+import { usePromptInputPlaceholder } from './usePromptInputPlaceholder.js';
+import { useSwarmBanner } from './useSwarmBanner.js';
+import { isNonSpacePrintable, isVimModeEnabled } from './utils.js';
+
+type Props = {
+  debug: boolean;
+  ideSelection: IDESelection | undefined;
+  toolSafetyContext: ToolSafetyContext;
+  setToolSafetyContext: (ctx: ToolSafetyContext) => void;
+  apiKeyStatus: VerificationStatus;
+  commands: Command[];
+  agents: AgentDefinition[];
+  isLoading: boolean;
+  verbose: boolean;
+  messages: Message[];
+  input: string;
+  onInputChange: (value: string) => void;
+  mode: PromptInputMode;
+  onModeChange: (mode: PromptInputMode) => void;
+  stashedPrompt:
+    | {
+        text: string;
+        cursorOffset: number;
+        pastedContents: Record<number, PastedContent>;
+      }
+    | undefined;
+  setStashedPrompt: (
+    value:
+      | {
+          text: string;
+          cursorOffset: number;
+          pastedContents: Record<number, PastedContent>;
+        }
+      | undefined,
+  ) => void;
+  submitCount: number;
+  onShowMessageSelector: () => void;
+  /** Fullscreen message actions: shift+↑ enters cursor. */
+  onMessageActionsEnter?: () => void;
+  mcpClients: MCPServerConnection[];
+  pastedContents: Record<number, PastedContent>;
+  setPastedContents: React.Dispatch<React.SetStateAction<Record<number, PastedContent>>>;
+  vimMode: VimMode;
+  setVimMode: (mode: VimMode) => void;
+  showBashesDialog: string | boolean;
+  setShowBashesDialog: (show: string | boolean) => void;
+  onExit: () => void;
+  getToolUseContext: (
+    messages: Message[],
+    newMessages: Message[],
+    abortController: AbortController,
+    mainLoopModel: string,
+  ) => ProcessUserInputContext;
+  onSubmit: (input: string, helpers: PromptInputHelpers, options?: { fromKeybinding?: boolean }) => Promise<void>;
+  onAgentSubmit?: (
+    input: string,
+    task: InProcessTeammateTaskState | LocalAgentTaskState,
+    helpers: PromptInputHelpers,
+  ) => Promise<void>;
+  isSearchingHistory: boolean;
+  setIsSearchingHistory: (isSearching: boolean) => void;
+  onDismissSideQuestion?: () => void;
+  isSideQuestionVisible?: boolean;
+  helpOpen: boolean;
+  setHelpOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  hasSuppressedDialogs?: boolean;
+  isLocalJSXCommandActive?: boolean;
+  insertTextRef?: React.MutableRefObject<{
+    insert: (text: string) => void;
+    setInputWithCursor: (value: string, cursor: number) => void;
+    cursorOffset: number;
+  } | null>;
+  voiceInterimRange?: { start: number; end: number } | null;
+};
+
+// Bottom slot has maxHeight="50%"; reserve lines for footer, border, status.
+const PROMPT_FOOTER_LINES = 5;
+const MIN_INPUT_VIEWPORT_LINES = 3;
+
+function PromptInput({
+  debug,
+  ideSelection,
+  toolSafetyContext,
+  setToolSafetyContext,
+  apiKeyStatus,
+  commands,
+  agents,
+  isLoading,
+  verbose,
+  messages,
+  input,
+  onInputChange,
+  mode,
+  onModeChange,
+  stashedPrompt,
+  setStashedPrompt,
+  submitCount,
+  onShowMessageSelector,
+  onMessageActionsEnter,
+  mcpClients,
+  pastedContents,
+  setPastedContents,
+  vimMode,
+  setVimMode,
+  showBashesDialog,
+  setShowBashesDialog,
+  onExit,
+  getToolUseContext,
+  onSubmit: onSubmitProp,
+  onAgentSubmit,
+  isSearchingHistory,
+  setIsSearchingHistory,
+  onDismissSideQuestion,
+  isSideQuestionVisible,
+  helpOpen,
+  setHelpOpen,
+  hasSuppressedDialogs,
+  isLocalJSXCommandActive = false,
+  insertTextRef,
+  voiceInterimRange,
+}: Props): React.ReactNode {
+  const mainLoopModel = useMainLoopModel();
+  // A local-jsx command (for example, /config while the agent is running) renders a full-
+  // screen dialog on top of PromptInput via the immediate-command path with
+  // shouldHidePromptInput: false. Those dialogs don't register in the overlay
+  // system, so treat them as a modal overlay here to stop navigation keys from
+  // leaking into TextInput/footer handlers and stacking a second dialog.
+  const isModalOverlayActive = useIsModalOverlayActive() || isLocalJSXCommandActive;
+  const [exitMessage, setExitMessage] = useState<{
+    show: boolean;
+    key?: string;
+  }>({ show: false });
+  const [cursorOffset, setCursorOffset] = useState<number>(input.length);
+  // Track the last input value set via internal handlers so we can detect
+  // external input changes (e.g. speech-to-text injection) and move cursor to end.
+  const lastInternalInputRef = React.useRef(input);
+  if (input !== lastInternalInputRef.current) {
+    // Input changed externally (not through any internal handler) — move cursor to end
+    setCursorOffset(input.length);
+    lastInternalInputRef.current = input;
+  }
+  // Wrap onInputChange to track internal changes before they trigger re-render
+  const trackAndSetInput = React.useCallback(
+    (value: string) => {
+      lastInternalInputRef.current = value;
+      onInputChange(value);
+    },
+    [onInputChange],
+  );
+  // Expose an insertText function so callers (e.g. STT) can splice text at the
+  // current cursor position instead of replacing the entire input.
+  if (insertTextRef) {
+    insertTextRef.current = {
+      cursorOffset,
+      insert: (text: string) => {
+        const needsSpace = cursorOffset === input.length && input.length > 0 && !/\s$/.test(input);
+        const insertText = needsSpace ? ' ' + text : text;
+        const newValue = input.slice(0, cursorOffset) + insertText + input.slice(cursorOffset);
+        lastInternalInputRef.current = newValue;
+        onInputChange(newValue);
+        setCursorOffset(cursorOffset + insertText.length);
+      },
+      setInputWithCursor: (value: string, cursor: number) => {
+        lastInternalInputRef.current = value;
+        onInputChange(value);
+        setCursorOffset(cursor);
+      },
+    };
+  }
+  const store = useAppStateStore();
+  const setAppState = useSetAppState();
+  const tasks = useAppState(s => s.tasks);
+  // Must match BridgeStatusIndicator's render condition (PromptInputFooter.tsx) —
+  // the pill returns null for implicit-and-not-reconnecting, so nav must too,
+  // otherwise bridge becomes an invisible selection stop.
+  // Tmux pill (ant-only) — visible when there's an active tungsten session
+  const hasTungstenSession = useAppState(s => process.env.USER_TYPE === 'ant' && s.tungstenActiveSession !== undefined);
+  const tmuxFooterVisible = process.env.USER_TYPE === 'ant' && hasTungstenSession;
+  // WebBrowser pill — visible when a browser is open
+  const bagelFooterVisible = useAppState(_s => false);
+  const teamContext = useAppState(s => s.teamContext);
+  const queuedCommands = useCommandQueue();
+  const viewingAgentTaskId = useAppState(s => s.viewingAgentTaskId);
+  const viewSelectionMode = useAppState(s => s.viewSelectionMode);
+  const showSpinnerTree = useAppState(s => s.expandedView) === 'teammates';
+  const thinkingEnabled = useAppState(s => s.thinkingEnabled);
+  const effortValue = useAppState(s => s.effortValue);
+  const viewedTeammate = getViewedTeammateTask(store.getState());
+  const viewingAgentName = viewedTeammate?.identity.agentName;
+  // identity.color is typed as `string | undefined` (not AgentColorName) because
+  // teammate identity comes from file-based config. Validate before casting to
+  // ensure we only use valid color names (falls back to cyan if invalid).
+  const viewingAgentColor =
+    viewedTeammate?.identity.color && AGENT_COLORS.includes(viewedTeammate.identity.color as AgentColorName)
+      ? (viewedTeammate.identity.color as AgentColorName)
+      : undefined;
+  // In-process teammates sorted alphabetically for footer team selector
+  const inProcessTeammates = useMemo(() => getRunningTeammatesSorted(tasks), [tasks]);
+
+  // Team mode: all background tasks are in-process teammates
+  const isTeammateMode = inProcessTeammates.length > 0 || viewedTeammate !== undefined;
+
+  const { historyQuery, setHistoryQuery, historyMatch, historyFailedMatch } = useHistorySearch(
+    entry => {
+      setPastedContents(entry.pastedContents);
+      void onSubmit(entry.display);
+    },
+    input,
+    trackAndSetInput,
+    setCursorOffset,
+    cursorOffset,
+    onModeChange,
+    mode,
+    isSearchingHistory,
+    setIsSearchingHistory,
+    setPastedContents,
+    pastedContents,
+  );
+  // Counter for paste IDs (shared between images and text).
+  // Compute initial value once from existing messages (for --continue/--resume).
+  // useRef(fn()) evaluates fn() on every render and discards the result after
+  // mount — getInitialPasteId walks all messages + regex-scans text blocks,
+  // so guard with a lazy-init pattern to run it exactly once.
+  const nextPasteIdRef = useRef(-1);
+  if (nextPasteIdRef.current === -1) {
+    nextPasteIdRef.current = getInitialPasteId(messages);
+  }
+  // Armed by onImagePaste; if the very next keystroke is a non-space
+  // printable, inputFilter prepends a space before it. Any other input
+  // (arrow, escape, backspace, paste, space) disarms without inserting.
+  const pendingSpaceAfterPillRef = useRef(false);
+
+  const [showAgentsDialog, setShowAgentsDialog] = useState(false);
+  const [teammateFooterIndex, setTeammateFooterIndex] = useState(0);
+  // -1 sentinel: tasks pill is selected but no specific agent row is selected yet.
+  // First ↓ selects the pill, second ↓ moves to row 0. Prevents double-select
+  // of pill + row when both bg tasks (pill) and forked agents (rows) are visible.
+  const agentTaskIndex = useAppState(s => s.agentTaskIndex);
+  const selectedBgAgentIndex = useAppState(s => s.selectedBgAgentIndex);
+  const setSelectedBgAgentIndex = useCallback(
+    (v: number | ((prev: number) => number)) =>
+      setAppState(prev => {
+        const next = typeof v === 'function' ? v(prev.selectedBgAgentIndex) : v;
+        if (next === prev.selectedBgAgentIndex) return prev;
+        return { ...prev, selectedBgAgentIndex: next };
+      }),
+    [setAppState],
+  );
+  const setAgentTaskIndex = useCallback(
+    (v: number | ((prev: number) => number)) =>
+      setAppState(prev => {
+        const next = typeof v === 'function' ? v(prev.agentTaskIndex) : v;
+        if (next === prev.agentTaskIndex) return prev;
+        return { ...prev, agentTaskIndex: next };
+      }),
+    [setAppState],
+  );
+  const agentTaskCount = useAgentTaskCount();
+  // The pill (BackgroundTaskStatus) only renders when non-local_agent bg tasks
+  // exist. When only local_agent tasks are running, the
+  // pill is absent, so the -1 sentinel would leave nothing visually selected.
+  // In that case, skip -1 and treat 0 as the minimum selectable index.
+  const hasBgTaskPill = useMemo(
+    () =>
+      Object.values(tasks).some(t => isBackgroundTask(t) && !(process.env.USER_TYPE === 'ant' && isPanelAgentTask(t))),
+    [tasks],
+  );
+  const minAgentTaskIndex = hasBgTaskPill ? -1 : 0;
+  // Clamp index when tasks complete and the list shrinks beneath the cursor
+  useEffect(() => {
+    if (agentTaskIndex >= agentTaskCount) {
+      setAgentTaskIndex(Math.max(minAgentTaskIndex, agentTaskCount - 1));
+    } else if (agentTaskIndex < minAgentTaskIndex) {
+      setAgentTaskIndex(minAgentTaskIndex);
+    }
+  }, [agentTaskCount, agentTaskIndex, minAgentTaskIndex]);
+  const [isPasting, setIsPasting] = useState(false);
+  const [isExternalEditorActive, setIsExternalEditorActive] = useState(false);
+  const [showQuickOpen, setShowQuickOpen] = useState(false);
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [showHistoryPicker, setShowHistoryPicker] = useState(false);
+  const [showThinkingToggle, setShowThinkingToggle] = useState(false);
+
+  // Check if cursor is on the first line of input
+  const isCursorOnFirstLine = useMemo(() => {
+    const firstNewlineIndex = input.indexOf('\n');
+    if (firstNewlineIndex === -1) {
+      return true; // No newlines, cursor is always on first line
+    }
+    return cursorOffset <= firstNewlineIndex;
+  }, [input, cursorOffset]);
+
+  const isCursorOnLastLine = useMemo(() => {
+    const lastNewlineIndex = input.lastIndexOf('\n');
+    if (lastNewlineIndex === -1) {
+      return true; // No newlines, cursor is always on last line
+    }
+    return cursorOffset > lastNewlineIndex;
+  }, [input, cursorOffset]);
+
+  // Derive team info from teamContext (no filesystem I/O needed)
+  // A session can only lead one team at a time
+  const cachedTeams: TeamSummary[] = useMemo(() => {
+    if (!isAgentSwarmsEnabled()) return [];
+    // In-process mode uses Shift+Down/Up navigation instead of footer menu
+    if (isInProcessEnabled()) return [];
+    if (!teamContext) {
+      return [];
+    }
+    const teammateCount = count(Object.values(teamContext.teammates), t => t.name !== 'team-lead');
+    return [
+      {
+        name: teamContext.teamName,
+        memberCount: teammateCount,
+        runningCount: 0,
+        idleCount: 0,
+      },
+    ];
+  }, [teamContext]);
+
+  // ─── Footer pill navigation ─────────────────────────────────────────────
+  // Which pills render below the input box. Order here IS the nav order
+  // (down/right = forward, up/left = back). Selection lives in AppState so
+  // pills rendered outside PromptInput can read focus.
+  const runningTaskCount = useMemo(() => count(Object.values(tasks), t => t.status === 'running'), [tasks]);
+  // Panel shows retained-completed agents too (getVisibleAgentTasks), so the
+  // pill must stay navigable whenever the panel has rows — not just when
+  // something is running.
+  const tasksFooterVisible =
+    (runningTaskCount > 0 || (process.env.USER_TYPE === 'ant' && agentTaskCount > 0)) &&
+    !shouldHideTasksFooter(tasks, showSpinnerTree);
+  const teamsFooterVisible = cachedTeams.length > 0;
+  const bgAgentList = useBackgroundAgentTasks();
+  const bgAgentFooterVisible = bgAgentList.length > 0;
+
+  const footerItems = useMemo(
+    () =>
+      [
+        bgAgentFooterVisible && 'bg_agent',
+        tasksFooterVisible && 'tasks',
+        tmuxFooterVisible && 'tmux',
+        bagelFooterVisible && 'bagel',
+        teamsFooterVisible && 'agents',
+      ].filter(Boolean) as FooterItem[],
+    [bgAgentFooterVisible, tasksFooterVisible, tmuxFooterVisible, bagelFooterVisible, teamsFooterVisible],
+  );
+
+  // Effective selection: null if the selected pill stopped rendering (bridge
+  // disconnected, task finished). The derivation makes the UI correct
+  // immediately; the useEffect below clears the raw state so it doesn't
+  // resurrect when the same pill reappears (new task starts → focus stolen).
+  const rawFooterSelection = useAppState(s => s.footerSelection);
+  const footerItemSelected = rawFooterSelection && footerItems.includes(rawFooterSelection) ? rawFooterSelection : null;
+
+  useEffect(() => {
+    if (rawFooterSelection && !footerItemSelected) {
+      setAppState(prev => (prev.footerSelection === null ? prev : { ...prev, footerSelection: null }));
+    }
+  }, [rawFooterSelection, footerItemSelected, setAppState]);
+
+  const tasksSelected = footerItemSelected === 'tasks';
+  const tmuxSelected = footerItemSelected === 'tmux';
+  const _bagelSelected = footerItemSelected === 'bagel';
+  const agentsSelected = footerItemSelected === 'agents';
+  const bgAgentSelected = footerItemSelected === 'bg_agent';
+
+  function selectFooterItem(item: FooterItem | null): void {
+    setAppState(prev => (prev.footerSelection === item ? prev : { ...prev, footerSelection: item }));
+    if (item === 'tasks') {
+      setTeammateFooterIndex(0);
+      setAgentTaskIndex(minAgentTaskIndex);
+    }
+    if (item === 'bg_agent') {
+      setSelectedBgAgentIndex(-1);
+    }
+  }
+
+  // delta: +1 = down/right, -1 = up/left. Returns true if nav happened
+  // (including deselecting at the start), false if at a boundary.
+  function navigateFooter(delta: 1 | -1, exitAtStart = false): boolean {
+    const idx = footerItemSelected ? footerItems.indexOf(footerItemSelected) : -1;
+    const next = footerItems[idx + delta];
+    if (next) {
+      selectFooterItem(next);
+      return true;
+    }
+    if (delta < 0 && exitAtStart) {
+      selectFooterItem(null);
+      return true;
+    }
+    return false;
+  }
+
+  const displayedValue = useMemo(
+    () =>
+      isSearchingHistory && historyMatch
+        ? getValueFromInput(typeof historyMatch === 'string' ? historyMatch : historyMatch.display)
+        : input,
+    [isSearchingHistory, historyMatch, input],
+  );
+
+  const thinkTriggers = useMemo(() => findThinkingTriggerPositions(displayedValue), [displayedValue]);
+
+  const slashCommandTriggers = useMemo(() => {
+    const positions = findSlashCommandPositions(displayedValue);
+    // Only highlight valid commands
+    return positions.filter(pos => {
+      const commandName = displayedValue.slice(pos.start + 1, pos.end); // +1 to skip "/"
+      return hasCommand(commandName, commands);
+    });
+  }, [displayedValue, commands]);
+
+  const tokenBudgetTriggers = useMemo(
+    () => (feature('TOKEN_BUDGET') ? findTokenBudgetPositions(displayedValue) : []),
+    [displayedValue],
+  );
+
+  const knownChannelsVersion = useSyncExternalStore(subscribeKnownChannels, getKnownChannelsVersion);
+  const slackChannelTriggers = useMemo(
+    () => (hasSlackMcpServer(store.getState().mcp.clients) ? findSlackChannelPositions(displayedValue) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- store is a stable ref
+    [displayedValue, knownChannelsVersion],
+  );
+
+  // Find @name mentions and highlight with team member's color
+  const memberMentionHighlights = useMemo((): Array<{
+    start: number;
+    end: number;
+    themeColor: keyof Theme;
+  }> => {
+    if (!isAgentSwarmsEnabled()) return [];
+    if (!teamContext?.teammates) return [];
+
+    const highlights: Array<{
+      start: number;
+      end: number;
+      themeColor: keyof Theme;
+    }> = [];
+    const members = teamContext.teammates;
+    if (!members) return highlights;
+
+    // Find all @name patterns in the input
+    const regex = /(^|\s)@([\w-]+)/g;
+    const memberValues = Object.values(members);
+    let match;
+    while ((match = regex.exec(displayedValue)) !== null) {
+      const leadingSpace = match[1] ?? '';
+      const nameStart = match.index + leadingSpace.length;
+      const fullMatch = match[0].trimStart();
+      const name = match[2];
+
+      // Check if this name matches a team member
+      const member = memberValues.find(t => t.name === name);
+      if (member?.color) {
+        const themeColor = AGENT_COLOR_TO_THEME_COLOR[member.color as AgentColorName];
+        if (themeColor) {
+          highlights.push({
+            start: nameStart,
+            end: nameStart + fullMatch.length,
+            themeColor,
+          });
+        }
+      }
+    }
+    return highlights;
+  }, [displayedValue, teamContext]);
+
+  const imageRefPositions = useMemo(
+    () =>
+      parseReferences(displayedValue)
+        .filter(r => r.match.startsWith('[Image'))
+        .map(r => ({ start: r.index, end: r.index + r.match.length })),
+    [displayedValue],
+  );
+
+  // chip.start is the "selected" state: the inverted chip IS the cursor.
+  // chip.end stays a normal position so you can park the cursor right after
+  // `]` like any other character.
+  const cursorAtImageChip = imageRefPositions.some(r => r.start === cursorOffset);
+
+  // up/down movement or a fullscreen click can land the cursor strictly
+  // inside a chip; snap to the nearer boundary so it's never editable
+  // char-by-char.
+  useEffect(() => {
+    const inside = imageRefPositions.find(r => cursorOffset > r.start && cursorOffset < r.end);
+    if (inside) {
+      const mid = (inside.start + inside.end) / 2;
+      setCursorOffset(cursorOffset < mid ? inside.start : inside.end);
+    }
+  }, [cursorOffset, imageRefPositions, setCursorOffset]);
+
+  const combinedHighlights = useMemo((): TextHighlight[] => {
+    const highlights: TextHighlight[] = [];
+
+    // Invert the [Image #N] chip when the cursor is at chip.start (the
+    // "selected" state) so backspace-to-delete is visually obvious.
+    for (const ref of imageRefPositions) {
+      if (cursorOffset === ref.start) {
+        highlights.push({
+          start: ref.start,
+          end: ref.end,
+          color: undefined,
+          inverse: true,
+          priority: 8,
+        });
+      }
+    }
+
+    if (isSearchingHistory && historyMatch && !historyFailedMatch) {
+      highlights.push({
+        start: cursorOffset,
+        end: cursorOffset + historyQuery.length,
+        color: 'warning',
+        priority: 20,
+      });
+    }
+
+    // Add /command highlighting (blue)
+    for (const trigger of slashCommandTriggers) {
+      highlights.push({
+        start: trigger.start,
+        end: trigger.end,
+        color: 'suggestion',
+        priority: 5,
+      });
+    }
+
+    // Add token budget highlighting (blue)
+    for (const trigger of tokenBudgetTriggers) {
+      highlights.push({
+        start: trigger.start,
+        end: trigger.end,
+        color: 'suggestion',
+        priority: 5,
+      });
+    }
+
+    for (const trigger of slackChannelTriggers) {
+      highlights.push({
+        start: trigger.start,
+        end: trigger.end,
+        color: 'suggestion',
+        priority: 5,
+      });
+    }
+
+    // Add @name highlighting with team member's color
+    for (const mention of memberMentionHighlights) {
+      highlights.push({
+        start: mention.start,
+        end: mention.end,
+        color: mention.themeColor,
+        priority: 5,
+      });
+    }
+
+    // Dim interim voice dictation text
+    if (voiceInterimRange) {
+      highlights.push({
+        start: voiceInterimRange.start,
+        end: voiceInterimRange.end,
+        color: undefined,
+        dimColor: true,
+        priority: 1,
+      });
+    }
+
+    // Rainbow highlighting for ultrathink keyword (per-character cycling colors)
+    if (isUltrathinkEnabled()) {
+      for (const trigger of thinkTriggers) {
+        for (let i = trigger.start; i < trigger.end; i++) {
+          highlights.push({
+            start: i,
+            end: i + 1,
+            color: getRainbowColor(i - trigger.start),
+            shimmerColor: getRainbowColor(i - trigger.start, true),
+            priority: 10,
+          });
+        }
+      }
+    }
+
+    return highlights;
+  }, [
+    isSearchingHistory,
+    historyQuery,
+    historyMatch,
+    historyFailedMatch,
+    cursorOffset,
+    imageRefPositions,
+    memberMentionHighlights,
+    slashCommandTriggers,
+    tokenBudgetTriggers,
+    slackChannelTriggers,
+    displayedValue,
+    voiceInterimRange,
+    thinkTriggers,
+  ]);
+
+  const { addNotification, removeNotification } = useNotifications();
+
+  // Show ultrathink notification
+  useEffect(() => {
+    if (thinkTriggers.length && isUltrathinkEnabled()) {
+      addNotification({
+        key: 'ultrathink-active',
+        text: 'Effort set to high for this turn',
+        priority: 'immediate',
+        timeoutMs: 5000,
+      });
+    } else {
+      removeNotification('ultrathink-active');
+    }
+  }, [addNotification, removeNotification, thinkTriggers.length]);
+
+  // Track input length for stash hint
+  const prevInputLengthRef = useRef(input.length);
+  const peakInputLengthRef = useRef(input.length);
+
+  // Dismiss stash hint when user makes any input change
+  const dismissStashHint = useCallback(() => {
+    removeNotification('stash-hint');
+  }, [removeNotification]);
+
+  // Show stash hint when user gradually clears substantial input
+  useEffect(() => {
+    const prevLength = prevInputLengthRef.current;
+    const peakLength = peakInputLengthRef.current;
+    const currentLength = input.length;
+    prevInputLengthRef.current = currentLength;
+
+    // Update peak when input grows
+    if (currentLength > peakLength) {
+      peakInputLengthRef.current = currentLength;
+      return;
+    }
+
+    // Reset state when input is empty
+    if (currentLength === 0) {
+      peakInputLengthRef.current = 0;
+      return;
+    }
+
+    // Detect gradual clear: peak was high, current is low, but this wasn't a single big jump
+    // (rapid clears like esc-esc go from 20+ to 0 in one step)
+    const clearedSubstantialInput = peakLength >= 20 && currentLength <= 5;
+    const wasRapidClear = prevLength >= 20 && currentLength <= 5;
+
+    if (clearedSubstantialInput && !wasRapidClear) {
+      const config = getGlobalConfig();
+      if (!config.hasUsedStash) {
+        addNotification({
+          key: 'stash-hint',
+          jsx: (
+            <Text dimColor>
+              Tip: <ConfigurableShortcutHint action="chat:stash" context="Chat" fallback="ctrl+s" description="stash" />
+            </Text>
+          ),
+          priority: 'immediate',
+          timeoutMs: FOOTER_TEMPORARY_STATUS_TIMEOUT,
+        });
+      }
+      peakInputLengthRef.current = currentLength;
+    }
+  }, [input.length, addNotification]);
+
+  // Initialize input buffer for undo functionality
+  const { pushToBuffer, undo, canUndo, clearBuffer } = useInputBuffer({
+    maxBufferSize: 50,
+    debounceMs: 1000,
+  });
+
+  useMaybeTruncateInput({
+    input,
+    pastedContents,
+    onInputChange: trackAndSetInput,
+    setCursorOffset,
+    setPastedContents,
+  });
+
+  const defaultPlaceholder = usePromptInputPlaceholder({
+    input,
+    submitCount,
+    viewingAgentName,
+  });
+
+  const onChange = useCallback(
+    (value: string) => {
+      if (value === '?') {
+        logEvent('tengu_help_toggled', {});
+        setHelpOpen(v => !v);
+        return;
+      }
+      setHelpOpen(false);
+
+      // Dismiss stash hint when user makes any input change
+      dismissStashHint();
+
+      // Check if this is a single character insertion at the start
+      const isSingleCharInsertion = value.length === input.length + 1;
+      const insertedAtStart = cursorOffset === 0;
+      const mode = getModeFromInput(value);
+
+      if (insertedAtStart && mode !== 'prompt') {
+        if (isSingleCharInsertion) {
+          onModeChange(mode);
+          return;
+        }
+        // Multi-char insertion into empty input (e.g. tab-accepting "! gcloud auth login")
+        if (input.length === 0) {
+          onModeChange(mode);
+          const valueWithoutMode = getValueFromInput(value).replaceAll('\t', '    ');
+          pushToBuffer(input, cursorOffset, pastedContents);
+          trackAndSetInput(valueWithoutMode);
+          setCursorOffset(valueWithoutMode.length);
+          return;
+        }
+      }
+
+      const processedValue = value.replaceAll('\t', '    ');
+
+      // Push current state to buffer before making changes
+      if (input !== processedValue) {
+        pushToBuffer(input, cursorOffset, pastedContents);
+      }
+
+      // Deselect footer items when user types
+      setAppState(prev => (prev.footerSelection === null ? prev : { ...prev, footerSelection: null }));
+
+      trackAndSetInput(processedValue);
+    },
+    [trackAndSetInput, onModeChange, input, cursorOffset, pushToBuffer, pastedContents, dismissStashHint, setAppState],
+  );
+
+  const { resetHistory, onHistoryUp, onHistoryDown, dismissSearchHint, historyIndex } = useArrowKeyHistory(
+    (value: string, historyMode: HistoryMode, pastedContents: Record<number, PastedContent>) => {
+      onChange(value);
+      onModeChange(historyMode);
+      setPastedContents(pastedContents);
+    },
+    input,
+    pastedContents,
+    setCursorOffset,
+    mode,
+  );
+
+  // Dismiss search hint when user starts searching
+  useEffect(() => {
+    if (isSearchingHistory) {
+      dismissSearchHint();
+    }
+  }, [isSearchingHistory, dismissSearchHint]);
+
+  // Only use history navigation when there are 0 or 1 slash command suggestions.
+  // Footer nav is NOT here — when a pill is selected, TextInput focus=false so
+  // these never fire. The Footer keybinding context handles ↑/↓ instead.
+  function handleHistoryUp() {
+    if (suggestions.length > 1) {
+      return;
+    }
+
+    // Only navigate history when cursor is on the first line.
+    // In multiline inputs, up arrow should move the cursor (handled by TextInput)
+    // and only trigger history when at the top of the input.
+    if (!isCursorOnFirstLine) {
+      return;
+    }
+
+    // If there's an editable queued command, move it to the input for editing when UP is pressed
+    const hasEditableCommand = queuedCommands.some(isQueuedCommandEditable);
+    if (hasEditableCommand) {
+      void popAllCommandsFromQueue();
+      return;
+    }
+
+    onHistoryUp();
+  }
+
+  function handleHistoryDown() {
+    if (suggestions.length > 1) {
+      return;
+    }
+
+    // Only navigate history/footer when cursor is on the last line.
+    // In multiline inputs, down arrow should move the cursor (handled by TextInput)
+    // and only trigger navigation when at the bottom of the input.
+    if (!isCursorOnLastLine) {
+      return;
+    }
+
+    // At bottom of history → enter footer at first visible pill
+    if (onHistoryDown() && footerItems.length > 0) {
+      const first = footerItems[0]!;
+      selectFooterItem(first);
+      if (first === 'tasks' && !getGlobalConfig().hasSeenTasksHint) {
+        saveGlobalConfig(c => (c.hasSeenTasksHint ? c : { ...c, hasSeenTasksHint: true }));
+      }
+    }
+  }
+
+  // Create a suggestions state directly - we'll sync it with useTypeahead later
+  const [suggestionsState, setSuggestionsStateRaw] = useState<{
+    suggestions: SuggestionItem[];
+    selectedSuggestion: number;
+    commandArgumentHint?: string;
+  }>({
+    suggestions: [],
+    selectedSuggestion: -1,
+    commandArgumentHint: undefined,
+  });
+
+  // Setter for suggestions state
+  const setSuggestionsState = useCallback(
+    (updater: typeof suggestionsState | ((prev: typeof suggestionsState) => typeof suggestionsState)) => {
+      setSuggestionsStateRaw(prev => (typeof updater === 'function' ? updater(prev) : updater));
+    },
+    [],
+  );
+
+  const onSubmit = useCallback(
+    async (inputParam: string, isSubmittingSlashCommand = false) => {
+      inputParam = inputParam.trimEnd();
+
+      // Don't submit if a footer indicator is being opened. Read fresh from
+      // store — footer:openSelected calls selectFooterItem(null) then onSubmit
+      // in the same tick, and the closure value hasn't updated yet. Apply the
+      // same "still visible?" derivation as footerItemSelected so a stale
+      // selection (pill disappeared) doesn't swallow Enter.
+      const state = store.getState();
+      if (state.footerSelection && footerItems.includes(state.footerSelection)) {
+        return;
+      }
+
+      // Enter in selection modes confirms selection (useBackgroundTaskNavigation).
+      // BaseTextInput's useInput registers before that hook (child effects fire first),
+      // so without this guard Enter would double-fire and auto-submit the suggestion.
+      if (state.viewSelectionMode === 'selecting-agent') {
+        return;
+      }
+
+      // Check for images early so image-only submissions are allowed.
+      const hasImages = Object.values(pastedContents).some(c => c.type === 'image');
+
+      // Handle @name direct message
+      if (isAgentSwarmsEnabled()) {
+        const directMessage = parseDirectMemberMessage(inputParam);
+        if (directMessage) {
+          const result = await sendDirectMemberMessage(
+            directMessage.recipientName,
+            directMessage.message,
+            teamContext,
+            writeToMailbox,
+          );
+
+          if (result.success) {
+            addNotification({
+              key: 'direct-message-sent',
+              text: `Sent to @${result.recipientName}`,
+              priority: 'immediate',
+              timeoutMs: 3000,
+            });
+            trackAndSetInput('');
+            setCursorOffset(0);
+            clearBuffer();
+            resetHistory();
+            return;
+          } else if (!result.success && (result as { error: string }).error === 'no_team_context') {
+            // No team context - fall through to normal prompt submission
+          } else {
+            // Unknown recipient - fall through to normal prompt submission
+            // This allows e.g. "@utils explain this code" to be sent as a prompt
+          }
+        }
+      }
+
+      // Allow submission if there are images attached, even without text
+      if (inputParam.trim() === '' && !hasImages) {
+        return;
+      }
+
+      // PromptInput UX: Check if suggestions dropdown is showing
+      // For directory suggestions, allow submission (Tab is used for completion)
+      const hasDirectorySuggestions =
+        suggestionsState.suggestions.length > 0 &&
+        suggestionsState.suggestions.every(s => s.description === 'directory');
+
+      if (suggestionsState.suggestions.length > 0 && !isSubmittingSlashCommand && !hasDirectorySuggestions) {
+        logForDebugging(`[onSubmit] early return: suggestions showing (count=${suggestionsState.suggestions.length})`);
+        return; // Don't submit, user needs to clear suggestions first
+      }
+
+      // Clear stash hint notification on submit
+      removeNotification('stash-hint');
+
+      // Route input to viewed agent (in-process teammate or named local_agent).
+      const activeAgent = getActiveAgentForInput(store.getState());
+      if (activeAgent.type !== 'leader' && onAgentSubmit) {
+        logEvent('tengu_transcript_input_to_teammate', {});
+        await onAgentSubmit(inputParam, activeAgent.task, {
+          setCursorOffset,
+          clearBuffer,
+          resetHistory,
+        });
+        return;
+      }
+
+      // Normal leader submission
+      await onSubmitProp(inputParam, {
+        setCursorOffset,
+        clearBuffer,
+        resetHistory,
+      });
+    },
+    [
+      teamContext,
+      store,
+      footerItems,
+      suggestionsState.suggestions,
+      onSubmitProp,
+      onAgentSubmit,
+      clearBuffer,
+      resetHistory,
+      setAppState,
+      pastedContents,
+      removeNotification,
+    ],
+  );
+
+  const { suggestions, selectedSuggestion, commandArgumentHint, inlineGhostText, maxColumnWidth } = useTypeahead({
+    commands,
+    onInputChange: trackAndSetInput,
+    onSubmit,
+    setCursorOffset,
+    input,
+    cursorOffset,
+    mode,
+    agents,
+    setSuggestionsState,
+    suggestionsState,
+    suppressSuggestions: isSearchingHistory || historyIndex > 0,
+  });
+
+  function onImagePaste(
+    image: string,
+    mediaType?: string,
+    filename?: string,
+    dimensions?: ImageDimensions,
+    sourcePath?: string,
+  ) {
+    logEvent('tengu_paste_image', {});
+    onModeChange('prompt');
+
+    const pasteId = nextPasteIdRef.current++;
+
+    const newContent: PastedContent = {
+      id: pasteId,
+      type: 'image',
+      content: image,
+      mediaType: mediaType || 'image/png', // default to PNG if not provided
+      filename: filename || 'Pasted image',
+      dimensions,
+      sourcePath,
+    };
+
+    // Cache path immediately (fast) so links work on render
+    cacheImagePath(newContent);
+
+    // Store image to disk in background
+    void storeImage(newContent);
+
+    // Update UI
+    setPastedContents(prev => ({ ...prev, [pasteId]: newContent }));
+    // Multi-image paste calls onImagePaste in a loop. If the ref is already
+    // armed, the previous pill's lazy space fires now (before this pill)
+    // rather than being lost.
+    const prefix = pendingSpaceAfterPillRef.current ? ' ' : '';
+    insertTextAtCursor(prefix + formatImageRef(pasteId));
+    pendingSpaceAfterPillRef.current = true;
+  }
+
+  // Prune images whose [Image #N] placeholder is no longer in the input text.
+  // Covers pill backspace, Ctrl+U, char-by-char deletion — any edit that drops
+  // the ref. onImagePaste batches setPastedContents + insertTextAtCursor in the
+  // same event, so this effect sees the placeholder already present.
+  useEffect(() => {
+    const referencedIds = new Set(parseReferences(input).map(r => r.id));
+    setPastedContents(prev => {
+      const orphaned = Object.values(prev).filter(c => c.type === 'image' && !referencedIds.has(c.id));
+      if (orphaned.length === 0) return prev;
+      const next = { ...prev };
+      for (const img of orphaned) delete next[img.id];
+      return next;
+    });
+  }, [input, setPastedContents]);
+
+  function onTextPaste(rawText: string) {
+    pendingSpaceAfterPillRef.current = false;
+    // Clean up pasted text - strip ANSI escape codes and normalize line endings and tabs
+    let text = stripAnsi(rawText).replace(/\r/g, '\n').replaceAll('\t', '    ');
+
+    // Match typed/auto-suggest: `!cmd` pasted into empty input enters bash mode.
+    if (input.length === 0) {
+      const pastedMode = getModeFromInput(text);
+      if (pastedMode !== 'prompt') {
+        onModeChange(pastedMode);
+        text = getValueFromInput(text);
+      }
+    }
+
+    const numLines = getPastedTextRefNumLines(text);
+    // Limit the number of lines to show in the input
+    // If the overall layout is too high then Ink will repaint
+    // the entire terminal.
+    // The actual required height is dependent on the content, this
+    // is just an estimate.
+    const maxLines = Math.min(rows - 10, 2);
+
+    // Use special handling for long pasted text (>PASTE_THRESHOLD chars)
+    // or if it exceeds the number of lines we want to show
+    if (text.length > PASTE_THRESHOLD || numLines > maxLines) {
+      const pasteId = nextPasteIdRef.current++;
+
+      const newContent: PastedContent = {
+        id: pasteId,
+        type: 'text',
+        content: text,
+      };
+
+      setPastedContents(prev => ({ ...prev, [pasteId]: newContent }));
+
+      insertTextAtCursor(formatPastedTextRef(pasteId, numLines));
+    } else {
+      // For shorter pastes, just insert the text normally
+      insertTextAtCursor(text);
+    }
+  }
+
+  const lazySpaceInputFilter = useCallback((input: string, key: Key): string => {
+    if (!pendingSpaceAfterPillRef.current) return input;
+    pendingSpaceAfterPillRef.current = false;
+    if (isNonSpacePrintable(input, key)) return ' ' + input;
+    return input;
+  }, []);
+
+  function insertTextAtCursor(text: string) {
+    // Push current state to buffer before inserting
+    pushToBuffer(input, cursorOffset, pastedContents);
+
+    const newInput = input.slice(0, cursorOffset) + text + input.slice(cursorOffset);
+    trackAndSetInput(newInput);
+    setCursorOffset(cursorOffset + text.length);
+  }
+
+  const doublePressEscFromEmpty = useDoublePress(
+    () => {},
+    () => onShowMessageSelector(),
+  );
+
+  // Function to get the queued command for editing. Returns true if commands were popped.
+  const popAllCommandsFromQueue = useCallback((): boolean => {
+    const result = popAllEditable(input, cursorOffset);
+    if (!result) {
+      return false;
+    }
+
+    trackAndSetInput(result.text);
+    onModeChange('prompt'); // Always prompt mode for queued commands
+    setCursorOffset(result.cursorOffset);
+
+    // Restore images from queued commands to pastedContents
+    if (result.images.length > 0) {
+      setPastedContents(prev => {
+        const newContents = { ...prev };
+        for (const image of result.images) {
+          newContents[image.id] = image;
+        }
+        return newContents;
+      });
+    }
+
+    return true;
+  }, [trackAndSetInput, onModeChange, input, cursorOffset, setPastedContents]);
+
+  // Insert the at-mentioned reference (the file and, optionally, a line range) when
+  // we receive an at-mentioned notification the IDE.
+  const onIdeAtMentioned = function (atMentioned: IDEAtMentioned) {
+    logEvent('tengu_ext_at_mentioned', {});
+    let atMentionedText: string;
+    const relativePath = path.relative(getCwd(), atMentioned.filePath);
+    if (atMentioned.lineStart && atMentioned.lineEnd) {
+      atMentionedText =
+        atMentioned.lineStart === atMentioned.lineEnd
+          ? `@${relativePath}#L${atMentioned.lineStart} `
+          : `@${relativePath}#L${atMentioned.lineStart}-${atMentioned.lineEnd} `;
+    } else {
+      atMentionedText = `@${relativePath} `;
+    }
+    const cursorChar = input[cursorOffset - 1] ?? ' ';
+    if (!/\s/.test(cursorChar)) {
+      atMentionedText = ` ${atMentionedText}`;
+    }
+    insertTextAtCursor(atMentionedText);
+  };
+  useIdeAtMentioned(mcpClients, onIdeAtMentioned);
+
+  // Handler for chat:undo - undo last edit
+  const handleUndo = useCallback(() => {
+    if (canUndo) {
+      const previousState = undo();
+      if (previousState) {
+        trackAndSetInput(previousState.text);
+        setCursorOffset(previousState.cursorOffset);
+        setPastedContents(previousState.pastedContents);
+      }
+    }
+  }, [canUndo, undo, trackAndSetInput, setPastedContents]);
+
+  // Handler for chat:newline - insert a newline at the cursor position
+  const handleNewline = useCallback(() => {
+    pushToBuffer(input, cursorOffset, pastedContents);
+    const newInput = input.slice(0, cursorOffset) + '\n' + input.slice(cursorOffset);
+    trackAndSetInput(newInput);
+    setCursorOffset(cursorOffset + 1);
+  }, [input, cursorOffset, trackAndSetInput, setCursorOffset, pushToBuffer, pastedContents]);
+
+  // Handler for chat:externalEditor - edit in $EDITOR
+  const handleExternalEditor = useCallback(async () => {
+    logEvent('tengu_external_editor_used', {});
+    setIsExternalEditorActive(true);
+
+    try {
+      // Pass pastedContents to expand collapsed text references
+      const result = await editPromptInEditor(input, pastedContents);
+
+      if (result.error) {
+        addNotification({
+          key: 'external-editor-error',
+          text: result.error,
+          color: 'warning',
+          priority: 'high',
+        });
+      }
+
+      if (result.content !== null && result.content !== input) {
+        // Push current state to buffer before making changes
+        pushToBuffer(input, cursorOffset, pastedContents);
+
+        trackAndSetInput(result.content);
+        setCursorOffset(result.content.length);
+      }
+    } catch (err) {
+      if (err instanceof Error) {
+        logError(err);
+      }
+      addNotification({
+        key: 'external-editor-error',
+        text: `External editor failed: ${errorMessage(err)}`,
+        color: 'warning',
+        priority: 'high',
+      });
+    } finally {
+      setIsExternalEditorActive(false);
+    }
+  }, [input, cursorOffset, pastedContents, pushToBuffer, trackAndSetInput, addNotification]);
+
+  // Handler for chat:stash - stash/unstash prompt
+  const handleStash = useCallback(() => {
+    if (input.trim() === '' && stashedPrompt !== undefined) {
+      // Pop stash when input is empty
+      trackAndSetInput(stashedPrompt.text);
+      setCursorOffset(stashedPrompt.cursorOffset);
+      setPastedContents(stashedPrompt.pastedContents);
+      setStashedPrompt(undefined);
+    } else if (input.trim() !== '') {
+      // Push to stash (save text, cursor position, and pasted contents)
+      setStashedPrompt({ text: input, cursorOffset, pastedContents });
+      trackAndSetInput('');
+      setCursorOffset(0);
+      setPastedContents({});
+      // Track usage for /discover and stop showing hint
+      saveGlobalConfig(c => {
+        if (c.hasUsedStash) return c;
+        return { ...c, hasUsedStash: true };
+      });
+    }
+  }, [input, cursorOffset, stashedPrompt, trackAndSetInput, setStashedPrompt, pastedContents, setPastedContents]);
+
+  // Handler for chat:thinkingToggle - toggle thinking mode
+  const handleThinkingToggle = useCallback(() => {
+    setShowThinkingToggle(prev => !prev);
+    if (helpOpen) {
+      setHelpOpen(false);
+    }
+  }, [helpOpen]);
+
+  // Handler for chat:imagePaste - paste image from clipboard
+  const handleImagePaste = useCallback(() => {
+    void getImageFromClipboard().then(imageData => {
+      if (imageData) {
+        onImagePaste(imageData.base64, imageData.mediaType);
+      } else {
+        const shortcutDisplay = getShortcutDisplay('chat:imagePaste', 'Chat', 'ctrl+v');
+        const message = env.isSSH()
+          ? "No image found in clipboard. You're SSH'd; try scp?"
+          : `No image found in clipboard. Use ${shortcutDisplay} to paste images.`;
+        addNotification({
+          key: 'no-image-in-clipboard',
+          text: message,
+          priority: 'immediate',
+          timeoutMs: 1000,
+        });
+      }
+    });
+  }, [addNotification, onImagePaste]);
+
+  // Register chat:submit handler directly in the handler registry (not via
+  // useKeybindings) so that only the ChordInterceptor can invoke it for chord
+  // completions (e.g., "ctrl+e s"). The default Enter binding for submit is
+  // handled by TextInput directly (via onSubmit prop) and useTypeahead (for
+  // autocomplete acceptance). Using useKeybindings would cause
+  // stopImmediatePropagation on Enter, blocking autocomplete from seeing the key.
+  const keybindingContext = useOptionalKeybindingContext();
+  useEffect(() => {
+    if (!keybindingContext || isModalOverlayActive) return;
+    return keybindingContext.registerHandler({
+      action: 'chat:submit',
+      context: 'Chat',
+      handler: () => {
+        void onSubmit(input);
+      },
+    });
+  }, [keybindingContext, isModalOverlayActive, onSubmit, input]);
+
+  // Chat context keybindings for editing shortcuts
+  // Note: history:previous/history:next are NOT handled here. They are passed as
+  // onHistoryUp/onHistoryDown props to TextInput, so that useTextInput's
+  // upOrHistoryUp/downOrHistoryDown can try cursor movement first and only
+  // fall through to history when the cursor can't move further.
+  const chatHandlers = useMemo(
+    () => ({
+      'chat:undo': handleUndo,
+      'chat:newline': handleNewline,
+      'chat:externalEditor': handleExternalEditor,
+      'chat:stash': handleStash,
+      'chat:thinkingToggle': handleThinkingToggle,
+      'chat:imagePaste': handleImagePaste,
+    }),
+    [handleUndo, handleNewline, handleExternalEditor, handleStash, handleThinkingToggle, handleImagePaste],
+  );
+
+  useKeybindings(chatHandlers, {
+    context: 'Chat',
+    isActive: !isModalOverlayActive,
+  });
+
+  // Shift+↑ enters message-actions cursor. Separate isActive so ctrl+r search
+  // doesn't leave stale isSearchingHistory on cursor-exit remount.
+  useKeybinding('chat:messageActions', () => onMessageActionsEnter?.(), {
+    context: 'Chat',
+    isActive: !isModalOverlayActive && !isSearchingHistory,
+  });
+
+  // Handle help:dismiss keybinding (ESC closes help menu)
+  // This is registered separately from Chat context so it has priority over
+  // CancelRequestHandler when help menu is open
+  useKeybinding(
+    'help:dismiss',
+    () => {
+      setHelpOpen(false);
+    },
+    { context: 'Help', isActive: helpOpen },
+  );
+
+  // Quick Open / Global Search. Hook calls are unconditional (Rules of Hooks);
+  // the handler body is feature()-gated so the setState calls and component
+  // references get tree-shaken in external builds.
+  const quickSearchActive = feature('QUICK_SEARCH') ? !isModalOverlayActive : false;
+  useKeybinding(
+    'app:quickOpen',
+    () => {
+      if (feature('QUICK_SEARCH')) {
+        setShowQuickOpen(true);
+        setHelpOpen(false);
+      }
+    },
+    { context: 'Global', isActive: quickSearchActive },
+  );
+  useKeybinding(
+    'app:globalSearch',
+    () => {
+      if (feature('QUICK_SEARCH')) {
+        setShowGlobalSearch(true);
+        setHelpOpen(false);
+      }
+    },
+    { context: 'Global', isActive: quickSearchActive },
+  );
+
+  useKeybinding(
+    'history:search',
+    () => {
+      if (feature('HISTORY_PICKER')) {
+        setShowHistoryPicker(true);
+        setHelpOpen(false);
+      }
+    },
+    {
+      context: 'Global',
+      isActive: feature('HISTORY_PICKER') ? !isModalOverlayActive : false,
+    },
+  );
+
+  // Footer indicator navigation keybindings. ↑/↓ live here (not in
+  // handleHistoryUp/Down) because TextInput focus=false when a pill is
+  // selected — its useInput is inactive, so this is the only path.
+  useKeybindings(
+    {
+      'footer:up': () => {
+        // ↑ in bg_agent pill: move selection up (-1 = main). At -1, leave pill.
+        if (bgAgentSelected) {
+          if (selectedBgAgentIndex > -1) {
+            setSelectedBgAgentIndex(prev => prev - 1);
+          } else {
+            selectFooterItem(null);
+          }
+          return;
+        }
+        // ↑ scrolls within the agent task list before leaving the pill
+        if (
+          tasksSelected &&
+          process.env.USER_TYPE === 'ant' &&
+          agentTaskCount > 0 &&
+          agentTaskIndex > minAgentTaskIndex
+        ) {
+          setAgentTaskIndex(prev => prev - 1);
+          return;
+        }
+        navigateFooter(-1, true);
+      },
+      'footer:down': () => {
+        // ↓ in bg_agent pill: move selection down through agents. Clamp at last.
+        if (bgAgentSelected) {
+          if (selectedBgAgentIndex < bgAgentList.length - 1) {
+            setSelectedBgAgentIndex(prev => prev + 1);
+          }
+          return;
+        }
+        // ↓ scrolls within the agent task list, never leaves the pill
+        if (tasksSelected && process.env.USER_TYPE === 'ant' && agentTaskCount > 0) {
+          if (agentTaskIndex < agentTaskCount - 1) {
+            setAgentTaskIndex(prev => prev + 1);
+          }
+          return;
+        }
+        if (tasksSelected && !isTeammateMode) {
+          setShowBashesDialog(true);
+          selectFooterItem(null);
+          return;
+        }
+        navigateFooter(1);
+      },
+      'footer:next': () => {
+        // Teammate mode: ←/→ cycles within the team member list
+        if (tasksSelected && isTeammateMode) {
+          const totalAgents = 1 + inProcessTeammates.length;
+          setTeammateFooterIndex(prev => (prev + 1) % totalAgents);
+          return;
+        }
+        navigateFooter(1);
+      },
+      'footer:previous': () => {
+        if (tasksSelected && isTeammateMode) {
+          const totalAgents = 1 + inProcessTeammates.length;
+          setTeammateFooterIndex(prev => (prev - 1 + totalAgents) % totalAgents);
+          return;
+        }
+        navigateFooter(-1);
+      },
+      'footer:openSelected': () => {
+        if (viewSelectionMode === 'selecting-agent') {
+          return;
+        }
+        switch (footerItemSelected) {
+          case 'tasks':
+            if (isTeammateMode) {
+              // Enter switches to the selected agent's view
+              if (teammateFooterIndex === 0) {
+                exitTeammateView(setAppState);
+              } else {
+                const teammate = inProcessTeammates[teammateFooterIndex - 1];
+                if (teammate) enterTeammateView(teammate.id, setAppState);
+              }
+            } else if (agentTaskIndex === 0 && agentTaskCount > 0) {
+              exitTeammateView(setAppState);
+            } else {
+              const selectedTaskId = getVisibleAgentTasks(tasks)[agentTaskIndex - 1]?.id;
+              if (selectedTaskId) {
+                enterTeammateView(selectedTaskId, setAppState);
+              } else {
+                setShowBashesDialog(true);
+                selectFooterItem(null);
+              }
+            }
+            break;
+          case 'tmux':
+            if (process.env.USER_TYPE === 'ant') {
+              setAppState(prev =>
+                prev.tungstenPanelAutoHidden
+                  ? { ...prev, tungstenPanelAutoHidden: false }
+                  : {
+                      ...prev,
+                      tungstenPanelVisible: !(prev.tungstenPanelVisible ?? true),
+                    },
+              );
+            }
+            break;
+          case 'bagel':
+            break;
+          case 'agents':
+            setShowAgentsDialog(true);
+            selectFooterItem(null);
+            break;
+          case 'bg_agent':
+            if (selectedBgAgentIndex === -1) {
+              exitTeammateView(setAppState);
+            } else {
+              const picked = bgAgentList[selectedBgAgentIndex];
+              if (picked) enterTeammateView(picked.agentId, setAppState);
+            }
+            // Keep the pill focused so ↑/↓ continue to work after Enter.
+            break;
+        }
+      },
+      'footer:clearSelection': () => {
+        selectFooterItem(null);
+      },
+      'footer:close': () => {
+        if (tasksSelected && agentTaskIndex >= 1) {
+          const task = getVisibleAgentTasks(tasks)[agentTaskIndex - 1];
+          if (!task) return false;
+          // When the selected row IS the viewed agent, 'x' types into the
+          // steering input. Any other row — dismiss it.
+          if (viewSelectionMode === 'viewing-agent' && task.id === viewingAgentTaskId) {
+            onChange(input.slice(0, cursorOffset) + 'x' + input.slice(cursorOffset));
+            setCursorOffset(cursorOffset + 1);
+            return;
+          }
+          stopOrDismissAgent(task.id, setAppState);
+          if (task.status !== 'running') {
+            setAgentTaskIndex(i => Math.max(minAgentTaskIndex, i - 1));
+          }
+          return;
+        }
+        // Not handled — let 'x' fall through to type-to-exit
+        return false;
+      },
+    },
+    {
+      context: 'Footer',
+      isActive: !!footerItemSelected && !isModalOverlayActive,
+    },
+  );
+
+  useInput((char, key) => {
+    // Skip all input handling when a full-screen dialog is open. These dialogs
+    // render via early return, but hooks run unconditionally — so without this
+    // guard, Escape inside a dialog leaks to the double-press message-selector.
+    if (showAgentsDialog || showQuickOpen || showGlobalSearch || showHistoryPicker) {
+      return;
+    }
+
+    // Detect failed Alt shortcuts on macOS (Option key produces special characters)
+    if (getPlatform() === 'macos' && isMacosOptionChar(char)) {
+      const shortcut = MACOS_OPTION_SPECIAL_CHARS[char];
+      const terminalName = getNativeCSIuTerminalDisplayName();
+      const jsx = terminalName ? (
+        <Text dimColor>
+          To enable {shortcut}, set <Text bold>Option as Meta</Text> in {terminalName} preferences (⌘,)
+        </Text>
+      ) : (
+        <Text dimColor>To enable {shortcut}, run /terminal-setup</Text>
+      );
+      addNotification({
+        key: 'option-meta-hint',
+        jsx,
+        priority: 'immediate',
+        timeoutMs: 5000,
+      });
+      // Don't return - let the character be typed so user sees the issue
+    }
+
+    // Footer navigation is handled via useKeybindings above (Footer context)
+
+    // NOTE: ctrl+_, ctrl+g, ctrl+s are handled via Chat context keybindings above
+
+    // Type-to-exit footer: printable chars while a pill is selected refocus
+    // the input and type the char. Nav keys are captured by useKeybindings
+    // above, so anything reaching here is genuinely not a footer action.
+    // onChange clears footerSelection, so no explicit deselect.
+    if (footerItemSelected && char && !key.ctrl && !key.meta && !key.escape && !key.return) {
+      onChange(input.slice(0, cursorOffset) + char + input.slice(cursorOffset));
+      setCursorOffset(cursorOffset + char.length);
+      return;
+    }
+
+    // Exit special modes when backspace/escape/delete/ctrl+u is pressed at cursor position 0
+    if (cursorOffset === 0 && (key.escape || key.backspace || key.delete || (key.ctrl && char === 'u'))) {
+      onModeChange('prompt');
+      setHelpOpen(false);
+    }
+
+    // Exit help mode when backspace is pressed and input is empty
+    if (helpOpen && input === '' && (key.backspace || key.delete)) {
+      setHelpOpen(false);
+    }
+
+    // esc is a little overloaded:
+    // - when we're loading a response, it's used to cancel the request
+    // - otherwise, it's used to show the message selector
+    // - when double pressed, it's used to clear the input
+    // - when input is empty, pop from command queue
+
+    // Handle ESC key press
+    if (key.escape) {
+      // Dismiss side question response if visible
+      if (isSideQuestionVisible && onDismissSideQuestion) {
+        onDismissSideQuestion();
+        return;
+      }
+
+      // Close help menu if open
+      if (helpOpen) {
+        setHelpOpen(false);
+        return;
+      }
+
+      // Footer selection clearing is now handled via Footer context keybindings
+      // (footer:clearSelection action bound to escape)
+      // If a footer item is selected, let the Footer keybinding handle it
+      if (footerItemSelected) {
+        return;
+      }
+
+      // If there's an editable queued command, move it to the input for editing when ESC is pressed
+      const hasEditableCommand = queuedCommands.some(isQueuedCommandEditable);
+      if (hasEditableCommand) {
+        void popAllCommandsFromQueue();
+        return;
+      }
+
+      if (messages.length > 0 && !input && !isLoading) {
+        doublePressEscFromEmpty();
+      }
+    }
+
+    if (key.return && helpOpen) {
+      setHelpOpen(false);
+    }
+  });
+
+  const swarmBanner = useSwarmBanner();
+
+  // Show effort notification on startup and when effort changes.
+  const effortNotificationText = getEffortNotificationText(effortValue, mainLoopModel);
+  useEffect(() => {
+    if (!effortNotificationText) {
+      removeNotification('effort-level');
+      return;
+    }
+    addNotification({
+      key: 'effort-level',
+      text: effortNotificationText,
+      priority: 'high',
+      timeoutMs: 12_000,
+    });
+  }, [effortNotificationText, addNotification, removeNotification]);
+
+  const { columns, rows } = useTerminalSize();
+  const textInputColumns = columns - 3;
+
+  // POC: click-to-position-cursor. Mouse tracking is only enabled inside
+  // <AlternateScreen>, so this is dormant in the normal main-screen REPL.
+  // localCol/localRow are relative to the onClick Box's top-left; the Box
+  // tightly wraps the text input so they map directly to (column, line)
+  // in the Cursor wrap model. MeasuredText.getOffsetFromPosition handles
+  // wide chars, wrapped lines, and clamps past-end clicks to line end.
+  const maxVisibleLines = isFullscreenEnvEnabled()
+    ? Math.max(MIN_INPUT_VIEWPORT_LINES, Math.floor(rows / 2) - PROMPT_FOOTER_LINES)
+    : undefined;
+
+  const handleInputClick = useCallback(
+    (e: ClickEvent) => {
+      // During history search the displayed text is historyMatch, not
+      // input, and showCursor is false anyway — skip rather than
+      // compute an offset against the wrong string.
+      if (!input || isSearchingHistory) return;
+      const c = Cursor.fromText(input, textInputColumns, cursorOffset);
+      const viewportStart = c.getViewportStartLine(maxVisibleLines);
+      const offset = c.measuredText.getOffsetFromPosition({
+        line: e.localRow + viewportStart,
+        column: e.localCol,
+      });
+      setCursorOffset(offset);
+    },
+    [input, textInputColumns, isSearchingHistory, cursorOffset, maxVisibleLines],
+  );
+
+  const handleOpenTasksDialog = useCallback(
+    (taskId?: string) => setShowBashesDialog(taskId ?? true),
+    [setShowBashesDialog],
+  );
+
+  const placeholder = defaultPlaceholder;
+
+  // Calculate if input has multiple lines
+  const isInputWrapped = useMemo(() => input.includes('\n'), [input]);
+
+  // Memoized callbacks for thinking toggle
+  const handleThinkingSelect = useCallback(
+    (enabled: boolean) => {
+      setAppState(prev => ({
+        ...prev,
+        thinkingEnabled: enabled,
+      }));
+      setShowThinkingToggle(false);
+      logEvent('tengu_thinking_toggled_hotkey', { enabled });
+      addNotification({
+        key: 'thinking-toggled-hotkey',
+        jsx: (
+          <Text color={enabled ? 'suggestion' : undefined} dimColor={!enabled}>
+            Thinking {enabled ? 'on' : 'off'}
+          </Text>
+        ),
+        priority: 'immediate',
+        timeoutMs: 3000,
+      });
+    },
+    [setAppState, addNotification],
+  );
+
+  const handleThinkingCancel = useCallback(() => {
+    setShowThinkingToggle(false);
+  }, []);
+
+  // Memoize the thinking toggle element
+  const thinkingToggleElement = useMemo(() => {
+    if (!showThinkingToggle) return null;
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <ThinkingToggle
+          currentValue={thinkingEnabled ?? true}
+          onSelect={handleThinkingSelect}
+          onCancel={handleThinkingCancel}
+          isMidConversation={messages.some(m => m.type === 'assistant')}
+        />
+      </Box>
+    );
+  }, [showThinkingToggle, thinkingEnabled, handleThinkingSelect, handleThinkingCancel, messages.length]);
+
+  // Portal dialog to DialogOverlay in fullscreen so it escapes the bottom
+  // slot's overflowY:hidden clip (same pattern as SuggestionsOverlay).
+  // Must be called before early returns below to satisfy rules-of-hooks.
+  useSetPromptOverlayDialog(null);
+
+  if (showBashesDialog) {
+    return (
+      <BackgroundTasksDialog
+        onDone={() => setShowBashesDialog(false)}
+        toolUseContext={getToolUseContext(messages, [], new AbortController(), mainLoopModel)}
+        initialDetailTaskId={typeof showBashesDialog === 'string' ? showBashesDialog : undefined}
+      />
+    );
+  }
+
+  if (isAgentSwarmsEnabled() && showAgentsDialog) {
+    return (
+      <AgentsDialog
+        initialTeams={cachedTeams}
+        onDone={() => {
+          setShowAgentsDialog(false);
+        }}
+      />
+    );
+  }
+
+  if (feature('QUICK_SEARCH')) {
+    const insertWithSpacing = (text: string) => {
+      const cursorChar = input[cursorOffset - 1] ?? ' ';
+      insertTextAtCursor(/\s/.test(cursorChar) ? text : ` ${text}`);
+    };
+    if (showQuickOpen) {
+      return <QuickOpenDialog onDone={() => setShowQuickOpen(false)} onInsert={insertWithSpacing} />;
+    }
+    if (showGlobalSearch) {
+      return <GlobalSearchDialog onDone={() => setShowGlobalSearch(false)} onInsert={insertWithSpacing} />;
+    }
+  }
+
+  if (feature('HISTORY_PICKER') && showHistoryPicker) {
+    return (
+      <HistorySearchDialog
+        initialQuery={input}
+        onSelect={entry => {
+          const entryMode = getModeFromInput(entry.display);
+          const value = getValueFromInput(entry.display);
+          onModeChange(entryMode);
+          trackAndSetInput(value);
+          setPastedContents(entry.pastedContents);
+          setCursorOffset(value.length);
+          setShowHistoryPicker(false);
+        }}
+        onCancel={() => setShowHistoryPicker(false)}
+      />
+    );
+  }
+
+  if (thinkingToggleElement) {
+    return thinkingToggleElement;
+  }
+
+  const baseProps: BaseTextInputProps = {
+    multiline: true,
+    onSubmit,
+    onChange,
+    value: historyMatch
+      ? getValueFromInput(typeof historyMatch === 'string' ? historyMatch : historyMatch.display)
+      : input,
+    // History navigation is handled via TextInput props (onHistoryUp/onHistoryDown),
+    // NOT via useKeybindings. This allows useTextInput's upOrHistoryUp/downOrHistoryDown
+    // to try cursor movement first and only fall through to history navigation when the
+    // cursor can't move further (important for wrapped text and multi-line input).
+    onHistoryUp: handleHistoryUp,
+    onHistoryDown: handleHistoryDown,
+    onHistoryReset: resetHistory,
+    placeholder,
+    onExit,
+    onExitMessage: (show, key) => setExitMessage({ show, key }),
+    onImagePaste,
+    columns: textInputColumns,
+    maxVisibleLines,
+    disableCursorMovementForUpDownKeys: suggestions.length > 0 || !!footerItemSelected,
+    disableEscapeDoublePress: suggestions.length > 0,
+    cursorOffset,
+    onChangeCursorOffset: setCursorOffset,
+    onPaste: onTextPaste,
+    onIsPastingChange: setIsPasting,
+    focus: !isSearchingHistory && !isModalOverlayActive && !footerItemSelected,
+    showCursor: !footerItemSelected && !isSearchingHistory && !cursorAtImageChip,
+    argumentHint: commandArgumentHint,
+    onUndo: canUndo
+      ? () => {
+          const previousState = undo();
+          if (previousState) {
+            trackAndSetInput(previousState.text);
+            setCursorOffset(previousState.cursorOffset);
+            setPastedContents(previousState.pastedContents);
+          }
+        }
+      : undefined,
+    highlights: combinedHighlights,
+    inlineGhostText,
+    inputFilter: lazySpaceInputFilter,
+  };
+
+  if (isExternalEditorActive) {
+    return (
+      <Box
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="center"
+        backgroundColor="userMessageBackground"
+        paddingTop={1}
+        paddingBottom={1}
+        width="100%"
+      >
+        <Text dimColor italic>
+          Save and close editor to continue...
+        </Text>
+      </Box>
+    );
+  }
+
+  const textInputElement = isVimModeEnabled() ? (
+    <VimTextInput {...baseProps} initialMode={vimMode} onModeChange={setVimMode} />
+  ) : (
+    <TextInput {...baseProps} />
+  );
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {!isFullscreenEnvEnabled() && <PromptInputQueuedCommands />}
+      {hasSuppressedDialogs && (
+        <Box marginTop={1} marginLeft={2}>
+          <Text dimColor>Waiting for response…</Text>
+        </Box>
+      )}
+      <PromptInputStashNotice hasStash={stashedPrompt !== undefined} />
+      {swarmBanner ? (
+        <>
+          {swarmBanner.text ? <Text color={swarmBanner.bgColor}>{swarmBanner.text}</Text> : null}
+          <Box
+            flexDirection="row"
+            width="100%"
+            backgroundColor="userMessageBackground"
+            paddingTop={1}
+            paddingBottom={1}
+          >
+            <PromptInputModeIndicator
+              mode={mode}
+              isLoading={isLoading}
+              viewingAgentName={viewingAgentName}
+              viewingAgentColor={viewingAgentColor}
+            />
+            <Box flexGrow={1} flexShrink={1} onClick={handleInputClick}>
+              {textInputElement}
+            </Box>
+          </Box>
+        </>
+      ) : (
+        <Box
+          flexDirection="row"
+          alignItems="flex-start"
+          justifyContent="flex-start"
+          backgroundColor={mode === 'bash' ? 'bashMessageBackgroundColor' : 'userMessageBackground'}
+          paddingTop={1}
+          paddingBottom={1}
+          width="100%"
+        >
+          <PromptInputModeIndicator
+            mode={mode}
+            isLoading={isLoading}
+            viewingAgentName={viewingAgentName}
+            viewingAgentColor={viewingAgentColor}
+          />
+          <Box flexGrow={1} flexShrink={1} onClick={handleInputClick}>
+            {textInputElement}
+          </Box>
+        </Box>
+      )}
+      <PromptInputFooter
+        apiKeyStatus={apiKeyStatus}
+        debug={debug}
+        exitMessage={exitMessage}
+        vimMode={isVimModeEnabled() ? vimMode : undefined}
+        mode={mode}
+        verbose={verbose}
+        suggestions={suggestions}
+        selectedSuggestion={selectedSuggestion}
+        maxColumnWidth={maxColumnWidth}
+        toolSafetyContext={toolSafetyContext}
+        helpOpen={helpOpen}
+        suppressHint={input.length > 0}
+        isLoading={isLoading}
+        tasksSelected={tasksSelected}
+        agentsSelected={agentsSelected}
+        tmuxSelected={tmuxSelected}
+        teammateFooterIndex={teammateFooterIndex}
+        ideSelection={ideSelection}
+        mcpClients={mcpClients}
+        isPasting={isPasting}
+        isInputWrapped={isInputWrapped}
+        messages={messages}
+        isSearching={isSearchingHistory}
+        historyQuery={historyQuery}
+        setHistoryQuery={setHistoryQuery}
+        historyFailedMatch={historyFailedMatch}
+        onOpenTasksDialog={isFullscreenEnvEnabled() ? handleOpenTasksDialog : undefined}
+      />
+      {isFullscreenEnvEnabled() ? (
+        // position=absolute takes zero layout height so the spinner
+        // doesn't shift when a notification appears/disappears. Yoga
+        // anchors absolute children at the parent's content-box origin;
+        // marginTop=-1 pulls it into the marginTop=1 gap row above the
+        // prompt border. height=1 +
+        // overflow=hidden clips multi-line notifications to a single row.
+        // flex-end anchors the bottom line so the visible row is always
+        // the most recent. Suppressed while the slash overlay or
+        // auto-mode opt-in dialog is up by height=0 (NOT unmount) — this
+        // Box renders later in tree order so it would paint over their
+        // bottom row. Notifications stay mounted while completion toggles.
+        <Box
+          position="absolute"
+          marginTop={-1}
+          height={suggestions.length === 0 ? 1 : 0}
+          width="100%"
+          paddingLeft={2}
+          paddingRight={1}
+          flexDirection="column"
+          justifyContent="flex-end"
+          overflow="hidden"
+        >
+          <Notifications
+            apiKeyStatus={apiKeyStatus}
+            debug={debug}
+            verbose={verbose}
+            messages={messages}
+            ideSelection={ideSelection}
+            mcpClients={mcpClients}
+            isInputWrapped={isInputWrapped}
+          />
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+/**
+ * Compute the initial paste ID by finding the max ID used in existing messages.
+ * This handles --continue/--resume scenarios where we need to avoid ID collisions.
+ */
+function getInitialPasteId(messages: Message[]): number {
+  let maxId = 0;
+  for (const message of messages) {
+    if (message.type === 'user') {
+      // Check image paste IDs
+      if (message.imagePasteIds) {
+        for (const id of message.imagePasteIds as number[]) {
+          if (id > maxId) maxId = id;
+        }
+      }
+      // Check text paste references in message content
+      if (Array.isArray(message.message!.content)) {
+        for (const block of message.message!.content) {
+          if (block.type === 'text') {
+            const refs = parseReferences(block.text);
+            for (const ref of refs) {
+              if (ref.id > maxId) maxId = ref.id;
+            }
+          }
+        }
+      }
+    }
+  }
+  return maxId + 1;
+}
+
+export default React.memo(PromptInput);
