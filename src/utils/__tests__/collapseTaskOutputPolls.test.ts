@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { RenderableMessage } from '../../types/message.js'
-import { collapseTaskOutputPolls } from '../collapseTaskOutputPolls.js'
+import {
+  collapseTaskOutputPolls,
+  compactTaskOutputPollsForAPI,
+} from '../collapseTaskOutputPolls.js'
 
 function poll(taskId: string, toolUseId: string): RenderableMessage {
   return {
@@ -92,5 +95,61 @@ describe('collapseTaskOutputPolls', () => {
       result('a2'),
     ]
     expect(collapseTaskOutputPolls(messages, true)).toBe(messages)
+  })
+
+  test('removes stale successful poll pairs from model context', () => {
+    const messages = [
+      poll('task-a', 'a1'),
+      result('a1'),
+      poll('task-a', 'a2'),
+      result('a2'),
+    ]
+    expect(
+      compactTaskOutputPollsForAPI(messages as never).map(message =>
+        String(message.uuid),
+      ),
+    ).toEqual(['assistant-a2', 'result-a2'])
+  })
+
+  test('preserves sibling content when removing a stale poll pair', () => {
+    const firstPoll = poll('task-a', 'a1') as any
+    const firstResult = result('a1') as any
+    const messages = [
+      {
+        ...firstPoll,
+        message: {
+          ...firstPoll.message,
+          content: [
+            { type: 'text', text: 'keep me' },
+            {
+              type: 'tool_use',
+              id: 'a1',
+              name: 'TaskOutput',
+              input: { task_id: 'task-a', block: false },
+            },
+          ],
+        },
+      },
+      {
+        ...firstResult,
+        message: {
+          ...firstResult.message,
+          content: [
+            { type: 'tool_result', tool_use_id: 'a1', content: 'status' },
+            { type: 'text', text: 'keep result sibling' },
+          ],
+        },
+      },
+      poll('task-a', 'a2'),
+      result('a2'),
+    ]
+    const compacted = compactTaskOutputPollsForAPI(messages as never)
+    expect(compacted).toHaveLength(4)
+    expect(compacted[0]?.message?.content).toEqual([
+      { type: 'text', text: 'keep me' },
+    ])
+    expect(compacted[1]?.message?.content).toEqual([
+      { type: 'text', text: 'keep result sibling' },
+    ])
   })
 })

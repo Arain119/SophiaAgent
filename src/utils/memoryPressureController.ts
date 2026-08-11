@@ -23,6 +23,11 @@ export type MemoryPressureSnapshot = {
 
 export type MemoryPressureAction = 'none' | 'pause' | 'resume' | 'terminate'
 
+/** New heavy work should wait while the controller is actively protecting the cgroup. */
+export function shouldDeferAgentAdmission(level: MemoryPressureLevel): boolean {
+  return level === 'critical' || level === 'emergency'
+}
+
 type ManagedTask = {
   taskId: string
   description: string
@@ -373,6 +378,30 @@ export function subscribeMemoryPressure(listener: () => void): () => void {
 
 export function getMemoryPressureSnapshot(): MemoryPressureSnapshot {
   return snapshot
+}
+
+/**
+ * Wait for enough memory headroom before starting another background agent.
+ * Existing work remains under the pressure controller; this only gates new work.
+ */
+export function waitForAgentAdmission(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Agent admission aborted'))
+  if (!shouldDeferAgentAdmission(snapshot.level)) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    let unsubscribe: (() => void) | undefined
+    const finish = (error?: Error) => {
+      unsubscribe?.()
+      signal.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve()
+    }
+    const onAbort = () => finish(new Error('Agent admission aborted'))
+    unsubscribe = subscribeMemoryPressure(() => {
+      if (!shouldDeferAgentAdmission(snapshot.level)) finish()
+    })
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (!shouldDeferAgentAdmission(snapshot.level)) finish()
+  })
 }
 
 export function resetMemoryPressureControllerForTests(): void {

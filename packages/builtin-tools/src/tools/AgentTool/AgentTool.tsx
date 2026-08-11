@@ -1,7 +1,8 @@
 import { feature } from 'bun:bundle';
 import * as React from 'react';
-import { buildTool, type ToolDef, toolMatchesName } from 'src/Tool.js';
+import { buildTool, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
 import type { AssistantMessage, Message as MessageType, NormalizedUserMessage } from 'src/types/message.js';
+import type { AppState } from 'src/state/AppStateStore.js';
 import { getQuerySourceForAgent } from 'src/utils/promptCategory.js';
 import { z } from 'zod/v4';
 import { clearInvokedSkillsForAgent, getSdkAgentProgressSummariesEnabled } from 'src/bootstrap/state.js';
@@ -31,6 +32,7 @@ import {
   updateProgressFromMessage,
 } from 'src/tasks/LocalAgentTask/LocalAgentTask.js';
 import { acquireAgentPermit } from 'src/tasks/LocalAgentTask/agentConcurrency.js';
+import { waitForAgentAdmission } from 'src/utils/memoryPressureController.js';
 import {
   buildAgentTerminalMemory,
   buildFailedAgentTerminalMemory,
@@ -87,6 +89,76 @@ import {
 } from './agentToolUtils.js';
 import { WORKER_AGENT } from './built-in/workerAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
+
+const MCP_START_WAIT_MS = 30_000;
+
+function requiredMcpServerIsPending(state: AppState, required: string[]): boolean {
+  return state.mcp.clients.some(
+    client =>
+      client.type === 'pending' && required.some(pattern => client.name.toLowerCase().includes(pattern.toLowerCase())),
+  );
+}
+
+function requiredMcpServerHasFailed(state: AppState, required: string[]): boolean {
+  return state.mcp.clients.some(
+    client =>
+      client.type === 'failed' && required.some(pattern => client.name.toLowerCase().includes(pattern.toLowerCase())),
+  );
+}
+
+async function waitForRequiredMcpServers(
+  toolUseContext: Pick<ToolUseContext, 'getAppState' | 'subscribeAppState' | 'abortController'>,
+  required: string[],
+  initialState: AppState,
+): Promise<AppState> {
+  if (!requiredMcpServerIsPending(initialState, required)) return initialState;
+
+  const isReady = (state: AppState) =>
+    !requiredMcpServerIsPending(state, required) || requiredMcpServerHasFailed(state, required);
+  const subscribeAppState = toolUseContext.subscribeAppState;
+  if (!subscribeAppState) {
+    const deadline = Date.now() + MCP_START_WAIT_MS;
+    let current = initialState;
+    while (Date.now() < deadline) {
+      await sleep(500, toolUseContext.abortController.signal, { throwOnAbort: true });
+      current = toolUseContext.getAppState();
+      if (isReady(current)) break;
+    }
+    return current;
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe = () => {};
+    const finish = () => {
+      if (settled) return;
+      const current = toolUseContext.getAppState();
+      if (!isReady(current) && Date.now() < deadline) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      unsubscribe();
+      toolUseContext.abortController.signal.removeEventListener('abort', onAbort);
+      resolve(current);
+    };
+    const deadline = Date.now() + MCP_START_WAIT_MS;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      unsubscribe();
+      reject(new AbortError());
+    };
+    unsubscribe = subscribeAppState(finish);
+    if (toolUseContext.abortController.signal.aborted) {
+      onAbort();
+    } else {
+      toolUseContext.abortController.signal.addEventListener('abort', onAbort, { once: true });
+      timeout = setTimeout(finish, MCP_START_WAIT_MS);
+      finish();
+    }
+  });
+}
 import {
   buildForkedMessages,
   buildWorktreeNotice,
@@ -443,33 +515,9 @@ export const AgentTool = buildTool({
           requiredMcpServers.some(pattern => c.name.toLowerCase().includes(pattern.toLowerCase())),
       );
 
-      let currentAppState = appState;
-      if (hasPendingRequiredServers) {
-        const MAX_WAIT_MS = 30_000;
-        const POLL_INTERVAL_MS = 500;
-        const deadline = Date.now() + MAX_WAIT_MS;
-
-        while (Date.now() < deadline) {
-          await sleep(POLL_INTERVAL_MS);
-          currentAppState = toolUseContext.getAppState();
-
-          // Early exit: if any required server has already failed, no point
-          // waiting for other pending servers — the check will fail regardless.
-          const hasFailedRequiredServer = currentAppState.mcp.clients.some(
-            c =>
-              c.type === 'failed' &&
-              requiredMcpServers.some(pattern => c.name.toLowerCase().includes(pattern.toLowerCase())),
-          );
-          if (hasFailedRequiredServer) break;
-
-          const stillPending = currentAppState.mcp.clients.some(
-            c =>
-              c.type === 'pending' &&
-              requiredMcpServers.some(pattern => c.name.toLowerCase().includes(pattern.toLowerCase())),
-          );
-          if (!stillPending) break;
-        }
-      }
+      let currentAppState = hasPendingRequiredServers
+        ? await waitForRequiredMcpServers(toolUseContext, requiredMcpServers, appState)
+        : appState;
 
       // Get servers that actually have tools (meaning they're connected AND authenticated)
       const serversWithTools: string[] = [];
@@ -775,6 +823,7 @@ export const AgentTool = buildTool({
       void runWithAgentContext(asyncAgentContext, async () => {
         let releasePermit: (() => void) | undefined;
         try {
+          await waitForAgentAdmission(agentBackgroundTask.abortController!.signal);
           releasePermit = await acquireAgentPermit(agentBackgroundTask.abortController!.signal);
           agentBackgroundTask.abortController!.signal.throwIfAborted();
           markAgentTaskRunning(asyncAgentId, rootSetAppState);

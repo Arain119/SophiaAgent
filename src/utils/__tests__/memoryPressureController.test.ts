@@ -4,6 +4,7 @@ import {
   readEffectiveCpuQuota,
   readMemoryUsage,
   selectMemoryPressureAction,
+  shouldDeferAgentAdmission,
 } from '../memoryPressureController.js'
 
 function fileReader(files: Record<string, string>) {
@@ -41,6 +42,13 @@ describe('memory pressure classification', () => {
         protectiveActionCooldownElapsed: true,
       }),
     ).toBe('none')
+  })
+
+  test('defers only new agents during active protection', () => {
+    expect(shouldDeferAgentAdmission('normal')).toBe(false)
+    expect(shouldDeferAgentAdmission('warning')).toBe(false)
+    expect(shouldDeferAgentAdmission('critical')).toBe(true)
+    expect(shouldDeferAgentAdmission('emergency')).toBe(true)
   })
 
   test('pauses gradually, resumes with headroom, and terminates at emergency', () => {

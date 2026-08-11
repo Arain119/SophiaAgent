@@ -157,13 +157,49 @@ export function getTaskWaitPollDelay(elapsedMs: number): number {
 }
 
 // Wait for task to complete
-async function waitForTaskCompletion(
+export async function waitForTaskCompletion(
   taskId: string,
   getAppState: () => { tasks?: Record<string, TaskState> },
   timeoutMs: number,
   abortController?: AbortController,
+  subscribeAppState?: (listener: () => void) => () => void,
 ): Promise<TaskState | null> {
   const startTime = Date.now();
+
+  const getTask = () => (getAppState().tasks?.[taskId] as TaskState | undefined) ?? null;
+  const isComplete = (task: TaskState | null) => !task || (task.status !== 'running' && task.status !== 'pending');
+
+  if (subscribeAppState) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe = () => {};
+      const finish = () => {
+        if (settled) return;
+        const task = getTask();
+        if (!isComplete(task) && Date.now() - startTime < timeoutMs) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        unsubscribe();
+        abortController?.signal.removeEventListener('abort', onAbort);
+        resolve(task);
+      };
+      const onAbort = () => {
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        unsubscribe();
+        reject(new AbortError());
+      };
+      unsubscribe = subscribeAppState(finish);
+      if (abortController?.signal.aborted) {
+        onAbort();
+      } else {
+        abortController?.signal.addEventListener('abort', onAbort, { once: true });
+        timeout = setTimeout(finish, timeoutMs);
+      }
+      finish();
+    });
+  }
 
   while (Date.now() - startTime < timeoutMs) {
     // Check abort signal
@@ -308,6 +344,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
       toolUseContext.getAppState,
       timeout,
       toolUseContext.abortController,
+      toolUseContext.subscribeAppState,
     );
 
     if (!completedTask) {

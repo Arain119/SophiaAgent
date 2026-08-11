@@ -200,6 +200,29 @@ const MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE = 30;
 const MAX_MESSAGES_WITHOUT_VIRTUALIZATION = 200;
 const MESSAGE_CAP_STEP = 50;
 
+type ActivityTransformCache = {
+  boundaryIndex: number;
+  boundaryMessage: RenderableMessage;
+  tools: Tools;
+  collapsedPrefix: RenderableMessage[];
+};
+
+function isAssistantTextBoundary(message: RenderableMessage): boolean {
+  return (
+    message.type === 'assistant' &&
+    Array.isArray(message.message?.content) &&
+    message.message.content.some(block => block.type === 'text')
+  );
+}
+
+function transformToolActivity(messages: RenderableMessage[], tools: Tools, verbose: boolean): RenderableMessage[] {
+  const { messages: groupedMessages } = applyGrouping(messages as MessageType[], tools, verbose);
+  return collapseBackgroundBashNotifications(
+    collapseHookSummaries(collapseTeammateShutdowns(collapseReadSearchGroups(groupedMessages, tools))),
+    verbose,
+  );
+}
+
 export type SliceAnchor = { uuid: string; idx: number } | null;
 
 /** Exported for testing. Mutates anchorRef when the window needs to advance. */
@@ -381,6 +404,7 @@ const MessagesImpl = ({
     messageCount: number;
     lastAssistantMsgId: string | undefined;
   } | null>(null);
+  const activityTransformCacheRef = useRef<ActivityTransformCache | null>(null);
 
   // Expensive message transforms — filter, reorder, group, collapse, lookups.
   // All O(n) over 27k messages. Split from the renderRange slice so scrolling
@@ -412,14 +436,44 @@ const MessagesImpl = ({
     const hasTruncatedMessages =
       shouldTruncate && messagesToShowNotTruncated.length > MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE;
 
-    const { messages: groupedMessages } = applyGrouping(messagesToShow as MessageType[], tools, verbose);
+    const activityMessages = collapseTaskOutputPolls(messagesToShow as RenderableMessage[], verbose);
+    let collapsed: RenderableMessage[];
+    if (verbose) {
+      collapsed = transformToolActivity(activityMessages, tools, true);
+    } else {
+      let boundaryIndex = -1;
+      for (let i = activityMessages.length - 2; i >= 0; i--) {
+        if (isAssistantTextBoundary(activityMessages[i]!)) {
+          boundaryIndex = i;
+          break;
+        }
+      }
 
-    const collapsed = collapseBackgroundBashNotifications(
-      collapseHookSummaries(
-        collapseTeammateShutdowns(collapseReadSearchGroups(collapseTaskOutputPolls(groupedMessages, verbose), tools)),
-      ),
-      verbose,
-    );
+      if (boundaryIndex < 0) {
+        activityTransformCacheRef.current = null;
+        collapsed = transformToolActivity(activityMessages, tools, false);
+      } else {
+        const boundaryMessage = activityMessages[boundaryIndex]!;
+        const cached = activityTransformCacheRef.current;
+        const collapsedPrefix =
+          cached &&
+          cached.boundaryIndex === boundaryIndex &&
+          cached.boundaryMessage === boundaryMessage &&
+          cached.tools === tools
+            ? cached.collapsedPrefix
+            : transformToolActivity(activityMessages.slice(0, boundaryIndex + 1), tools, false);
+        activityTransformCacheRef.current = {
+          boundaryIndex,
+          boundaryMessage,
+          tools,
+          collapsedPrefix,
+        };
+        collapsed = [
+          ...collapsedPrefix,
+          ...transformToolActivity(activityMessages.slice(boundaryIndex + 1), tools, false),
+        ];
+      }
+    }
 
     const lookupsKey = computeMessageStructureKey(normalizedMessages, messagesToShow as MessageType[]);
     const currentLastAssistantMsgId = (() => {

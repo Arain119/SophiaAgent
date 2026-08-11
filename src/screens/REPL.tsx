@@ -2245,6 +2245,7 @@ export function REPL({
           refreshTools: computeTools,
         },
         getAppState: () => store.getState(),
+        subscribeAppState: store.subscribe,
         setAppState,
         messages,
         setMessages,

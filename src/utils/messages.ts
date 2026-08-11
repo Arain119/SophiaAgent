@@ -73,6 +73,7 @@ import type {
 import { isAdvisorBlock } from './advisor.js'
 import { isAgentSwarmsEnabled } from './agentSwarmsEnabled.js'
 import { count } from './array.js'
+import { compactTaskOutputPollsForAPI } from './collapseTaskOutputPolls.js'
 import {
   type Attachment,
   type HookAttachment,
@@ -2215,9 +2216,9 @@ export function normalizeMessagesForAPI(
   // First, reorder attachments to bubble up until they hit a tool result or assistant message
   // Then strip virtual messages — they're display-only (e.g. REPL inner tool
   // calls) and must never reach the API.
-  const reorderedMessages = reorderAttachmentsForAPI(messages).filter(
-    m => !((m.type === 'user' || m.type === 'assistant') && m.isVirtual),
-  )
+  const reorderedMessages = reorderAttachmentsForAPI(
+    compactTaskOutputPollsForAPI(messages),
+  ).filter(m => !((m.type === 'user' || m.type === 'assistant') && m.isVirtual))
 
   // Build a map from error text → which block types to strip from the preceding user message.
   const errorToBlockTypes: Record<string, Set<string>> = {

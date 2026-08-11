@@ -12,7 +12,10 @@ import {
 const MAX_RESPONSES_REQUEST_ATTEMPTS = 10
 const MAX_FAILOVER_PROVIDER_ATTEMPTS = 3
 const MAX_RETRY_DELAY_MS = 30_000
-const DEFAULT_LONG_RETRY_DELAY_MS = 30 * 60 * 1000
+// A short shared cooldown lets transient provider overload recover without
+// turning an otherwise healthy long task into a 30-minute blind spot. The
+// persisted retry window still prevents concurrent agents from stampeding.
+const DEFAULT_LONG_RETRY_DELAY_MS = 2 * 60 * 1000
 
 function longRetryDelayMs(): number {
   const configured = Number(process.env.SOPHIA_API_LONG_RETRY_MS)

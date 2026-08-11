@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import type { TaskState } from 'src/tasks/types.js'
 import {
   getTaskWaitPollDelay,
   resolveTaskOutputMaxChars,
   summarizeRunningTaskOutput,
   TaskOutputTool,
+  waitForTaskCompletion,
 } from './TaskOutputTool.js'
 
 describe('TaskOutputTool compact polling UI', () => {
@@ -52,5 +54,23 @@ describe('TaskOutputTool compact polling UI', () => {
     expect(getTaskWaitPollDelay(0)).toBe(250)
     expect(getTaskWaitPollDelay(1_000)).toBe(500)
     expect(getTaskWaitPollDelay(5_000)).toBe(1_000)
+  })
+
+  test('supports an event-driven completion subscription', async () => {
+    let task = { id: 'job-1', status: 'running' } as unknown as TaskState
+    const listeners = new Set<() => void>()
+    const resultPromise = waitForTaskCompletion(
+      'job-1',
+      () => ({ tasks: { 'job-1': task } }),
+      1_000,
+      undefined,
+      listener => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    )
+    task = { id: 'job-1', status: 'completed' } as unknown as TaskState
+    for (const listener of listeners) listener()
+    await expect(resultPromise).resolves.toMatchObject({ status: 'completed' })
   })
 })

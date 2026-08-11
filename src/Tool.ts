@@ -157,6 +157,8 @@ export type ToolUseContext = {
   abortController: AbortController
   readFileState: FileStateCache
   getAppState(): AppState
+  /** Optional store subscription for event-driven task waits in interactive sessions. */
+  subscribeAppState?: (listener: () => void) => () => void
   setAppState(f: (prev: AppState) => AppState): void
   /**
    * Always-shared setAppState for session-scoped infrastructure (background
