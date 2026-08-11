@@ -4,7 +4,7 @@
 
 import type { TaskStateBase } from '../../Task.js'
 import type { AgentId } from '../../types/ids.js'
-import type { ShellCommand } from '../../utils/ShellCommand.js'
+import type { ExecResult, ShellCommand } from '../../utils/ShellCommand.js'
 
 export type LocalShellTaskState = TaskStateBase & {
   type: 'local_bash' // Keep as 'local_bash' for backward compatibility with persisted session state
@@ -12,6 +12,7 @@ export type LocalShellTaskState = TaskStateBase & {
   result?: {
     code: number
     interrupted: boolean
+    terminationReason?: ExecResult['terminationReason']
   }
   completionStatusSentInAttachment: boolean
   shellCommand: ShellCommand | null

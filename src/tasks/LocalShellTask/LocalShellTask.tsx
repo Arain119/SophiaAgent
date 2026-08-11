@@ -15,7 +15,7 @@ import { registerCleanup } from '../../utils/cleanupRegistry.js';
 import { tailFile } from '../../utils/fsOperations.js';
 import { logError } from '../../utils/log.js';
 import { enqueuePendingNotification } from '../../utils/messageQueueManager.js';
-import type { ShellCommand } from '../../utils/ShellCommand.js';
+import type { ExecResult, ShellCommand } from '../../utils/ShellCommand.js';
 import { evictTaskOutput, getTaskOutputPath } from '../../utils/task/diskOutput.js';
 import { registerTask, updateTaskState } from '../../utils/task/framework.js';
 import { escapeXml } from '../../utils/xml.js';
@@ -120,6 +120,7 @@ function enqueueShellNotification(
   description: string,
   status: 'completed' | 'failed' | 'killed',
   exitCode: number | undefined,
+  terminationReason: ExecResult['terminationReason'],
   setAppState: SetAppState,
   toolUseId?: string,
   agentId?: AgentId,
@@ -146,7 +147,7 @@ function enqueueShellNotification(
       summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" completed${exitCode !== undefined ? ` (exit code ${exitCode})` : ''}`;
       break;
     case 'failed':
-      summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" failed${exitCode !== undefined ? ` with exit code ${exitCode}` : ''}`;
+      summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" failed${exitCode !== undefined ? ` with exit code ${exitCode}` : ''}${terminationReason === 'likely_oom' ? ' (likely memory pressure; split the work or reduce concurrency before retrying)' : ''}`;
       break;
     case 'killed':
       summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" was stopped`;
@@ -228,7 +229,11 @@ export async function spawnShellTask(
       return {
         ...task,
         status: result.code === 0 ? 'completed' : 'failed',
-        result: { code: result.code, interrupted: result.interrupted },
+        result: {
+          code: result.code,
+          interrupted: result.interrupted,
+          terminationReason: result.terminationReason,
+        },
         shellCommand: null,
         unregisterCleanup: undefined,
         endTime: Date.now(),
@@ -240,6 +245,7 @@ export async function spawnShellTask(
       description,
       wasKilled ? 'killed' : result.code === 0 ? 'completed' : 'failed',
       result.code,
+      result.terminationReason,
       setAppState,
       toolUseId,
       agentId,
@@ -347,7 +353,11 @@ function backgroundTask(taskId: string, getAppState: () => AppState, setAppState
       return {
         ...t,
         status: result.code === 0 ? 'completed' : 'failed',
-        result: { code: result.code, interrupted: result.interrupted },
+        result: {
+          code: result.code,
+          interrupted: result.interrupted,
+          terminationReason: result.terminationReason,
+        },
         shellCommand: null,
         unregisterCleanup: undefined,
         endTime: Date.now(),
@@ -358,10 +368,28 @@ function backgroundTask(taskId: string, getAppState: () => AppState, setAppState
     cleanupFn?.();
 
     if (wasKilled) {
-      enqueueShellNotification(taskId, description, 'killed', result.code, setAppState, toolUseId, agentId);
+      enqueueShellNotification(
+        taskId,
+        description,
+        'killed',
+        result.code,
+        result.terminationReason,
+        setAppState,
+        toolUseId,
+        agentId,
+      );
     } else {
       const finalStatus = result.code === 0 ? 'completed' : 'failed';
-      enqueueShellNotification(taskId, description, finalStatus, result.code, setAppState, toolUseId, agentId);
+      enqueueShellNotification(
+        taskId,
+        description,
+        finalStatus,
+        result.code,
+        result.terminationReason,
+        setAppState,
+        toolUseId,
+        agentId,
+      );
     }
 
     void evictTaskOutput(taskId);
@@ -465,7 +493,11 @@ export function backgroundExistingForegroundTask(
       return {
         ...t,
         status: result.code === 0 ? 'completed' : 'failed',
-        result: { code: result.code, interrupted: result.interrupted },
+        result: {
+          code: result.code,
+          interrupted: result.interrupted,
+          terminationReason: result.terminationReason,
+        },
         shellCommand: null,
         unregisterCleanup: undefined,
         endTime: Date.now(),
@@ -475,7 +507,16 @@ export function backgroundExistingForegroundTask(
     cleanupFn?.();
 
     const finalStatus = wasKilled ? 'killed' : result.code === 0 ? 'completed' : 'failed';
-    enqueueShellNotification(taskId, description, finalStatus, result.code, setAppState, toolUseId, agentId);
+    enqueueShellNotification(
+      taskId,
+      description,
+      finalStatus,
+      result.code,
+      result.terminationReason,
+      setAppState,
+      toolUseId,
+      agentId,
+    );
 
     void evictTaskOutput(taskId);
   });

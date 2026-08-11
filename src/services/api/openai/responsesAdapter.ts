@@ -3,12 +3,16 @@ import type { BetaRawMessageStreamEvent } from '@anthropic-ai/sdk/resources/beta
 import { normalizeOpenAIUsage, type AnthropicUsage } from '@ant/model-provider'
 import { logForDebugging } from '../../../utils/debug.js'
 import { sleep } from '../../../utils/sleep.js'
+import {
+  clearProviderRetryAt,
+  getProviderRetryAt,
+  setProviderRetryAt,
+} from './providerRetryState.js'
 
 const MAX_RESPONSES_REQUEST_ATTEMPTS = 10
 const MAX_FAILOVER_PROVIDER_ATTEMPTS = 3
 const MAX_RETRY_DELAY_MS = 30_000
 const DEFAULT_LONG_RETRY_DELAY_MS = 30 * 60 * 1000
-const providerRetryWindows = new Map<string, number>()
 
 function longRetryDelayMs(): number {
   const configured = Number(process.env.SOPHIA_API_LONG_RETRY_MS)
@@ -75,12 +79,12 @@ async function waitForLongRetry(
 ): Promise<void> {
   const key = retryWindowKey(params)
   const now = Date.now()
-  const existingRetryAt = providerRetryWindows.get(key)
+  const existingRetryAt = getProviderRetryAt(key)
   const retryAt =
     existingRetryAt && existingRetryAt > now
       ? existingRetryAt
       : now + longRetryDelayMs()
-  providerRetryWindows.set(key, retryAt)
+  setProviderRetryAt(key, retryAt)
   const delayMs = Math.max(0, retryAt - now)
   logForDebugging(
     `[OpenAI Responses] all providers temporarily unavailable; retrying in ${Math.ceil(delayMs / 60000)} minute(s): ${error instanceof Error ? error.message : String(error)}`,
@@ -93,8 +97,14 @@ async function fetchResponsesWithLongRetry(
 ): Promise<ResponsesFetchState> {
   while (true) {
     try {
+      const retryAt = getProviderRetryAt(retryWindowKey(params))
+      if (retryAt && retryAt > Date.now()) {
+        await sleep(retryAt - Date.now(), params.signal, {
+          throwOnAbort: true,
+        })
+      }
       const state = await fetchResponsesWithFailover(params, 0)
-      providerRetryWindows.delete(retryWindowKey(params))
+      clearProviderRetryAt(retryWindowKey(params))
       return state
     } catch (error) {
       if (!longRetryEnabled(params, error)) throw error
@@ -416,6 +426,7 @@ function isRetryableErrorMessage(message: string): boolean {
     normalized.includes('concurrency limit') ||
     normalized.includes('rate_limit') ||
     normalized.includes('rate limit') ||
+    normalized.includes('overloaded') ||
     normalized.includes('temporarily unavailable') ||
     normalized.includes('upstream request failed') ||
     normalized.includes('bad gateway') ||

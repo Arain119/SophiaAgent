@@ -40,6 +40,11 @@ import { SandboxManager } from 'src/utils/sandbox/sandbox-adapter.js';
 import { semanticBoolean } from 'src/utils/semanticBoolean.js';
 import { semanticNumber } from 'src/utils/semanticNumber.js';
 import { EndTruncatingAccumulator } from 'src/utils/stringUtils.js';
+import {
+  findCachedVerification,
+  formatCachedVerification,
+  recordPassedVerification,
+} from 'src/utils/verificationLedger.js';
 import { getTaskOutputPath } from 'src/utils/task/diskOutput.js';
 import { TaskOutput } from 'src/utils/task/TaskOutput.js';
 import { isOutputLineTruncated } from 'src/utils/terminal.js';
@@ -719,6 +724,21 @@ export const BashTool = buildTool({
       return applySedEdit(input._simulatedSedEdit, toolUseContext, parentMessage);
     }
 
+    if (!input.run_in_background) {
+      const cached = findCachedVerification(input.command);
+      if (cached) {
+        return {
+          data: {
+            stdout: formatCachedVerification(cached),
+            stderr: '',
+            interrupted: false,
+            isImage: false,
+            noOutputExpected: false,
+          },
+        };
+      }
+    }
+
     const { abortController, getAppState, setAppState, setToolJSX } = toolUseContext;
 
     const stdoutAccumulator = new EndTruncatingAccumulator();
@@ -913,6 +933,10 @@ export const BashTool = buildTool({
       persistedOutputPath,
       persistedOutputSize,
     };
+
+    if (result.code === 0 && !wasInterrupted && !input.run_in_background) {
+      recordPassedVerification(input.command, compressedStdout);
+    }
 
     return {
       data,

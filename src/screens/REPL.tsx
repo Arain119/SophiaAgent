@@ -143,6 +143,10 @@ import { addToHistory, removeLastFromHistory, expandPastedTextRefs, parseReferen
 import { prependModeCharacterToInput } from '../components/PromptInput/inputModes.js';
 import { prependToShellHistoryCache } from '../utils/suggestions/shellHistoryCompletion.js';
 import { useApiKeyVerification } from '../hooks/useApiKeyVerification.js';
+import {
+  getProviderRetryStateSnapshot,
+  subscribeProviderRetryState,
+} from '../services/api/openai/providerRetryState.js';
 import { GlobalKeybindingHandlers } from '../hooks/useGlobalKeybindings.js';
 import { CommandKeybindingHandlers } from '../hooks/useCommandKeybindings.js';
 import { KeybindingSetup } from '../keybindings/KeybindingProviderSetup.js';
@@ -4099,6 +4103,21 @@ export function REPL({
     return total === 1 ? `running ${hookType} hook` : `running stop hooks… ${completedCount}/${total}`;
   }, [messages, isLoading]);
 
+  const providerRetryStates = React.useSyncExternalStore(
+    subscribeProviderRetryState,
+    getProviderRetryStateSnapshot,
+    getProviderRetryStateSnapshot,
+  );
+  const providerRetrySuffix = useMemo(() => {
+    const retryAt = providerRetryStates[0]?.retryAt;
+    if (!retryAt || !isLoading) return null;
+    return `provider retry at ${new Date(retryAt).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`;
+  }, [providerRetryStates, isLoading]);
+  const runtimeSpinnerSuffix = providerRetrySuffix ?? stopHookSpinnerSuffix;
+
   // Callback to capture frozen state when entering transcript mode
   const handleEnterTranscript = useCallback(() => {
     setFrozenTranscriptState({
@@ -4668,7 +4687,7 @@ export function REPL({
                   apiMetricsRef={apiMetricsRef}
                   compactProgressActiveRef={compactProgressActiveRef}
                   overrideMessage={spinnerMessage}
-                  spinnerSuffix={stopHookSpinnerSuffix}
+                  spinnerSuffix={runtimeSpinnerSuffix}
                   verbose={verbose}
                   loadingStartTimeRef={loadingStartTimeRef}
                   totalPausedMsRef={totalPausedMsRef}

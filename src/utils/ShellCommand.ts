@@ -15,6 +15,7 @@ export type ExecResult = {
   stderr: string
   code: number
   interrupted: boolean
+  terminationReason?: 'user' | 'timeout' | 'output_limit' | 'likely_oom'
   backgroundTaskId?: string
   backgroundedByUser?: boolean
   /** Set when assistant-mode auto-backgrounded a long-running blocking command. */
@@ -48,6 +49,13 @@ export type ShellCommand = {
 
 const SIGKILL = 137
 const SIGTERM = 143
+
+export function classifyShellTermination(
+  code: number,
+  initiatedReason?: Exclude<ExecResult['terminationReason'], 'likely_oom'>,
+): ExecResult['terminationReason'] {
+  return initiatedReason ?? (code === SIGKILL ? 'likely_oom' : undefined)
+}
 
 // Background tasks write stdout/stderr directly to a file fd (no JS involvement),
 // so a stuck append loop can fill the disk. Poll file size and kill when exceeded.
@@ -120,6 +128,7 @@ class ShellCommandImpl implements ShellCommand {
   #timeoutId: NodeJS.Timeout | null = null
   #sizeWatchdog: NodeJS.Timeout | null = null
   #killedForSize = false
+  #killReason: ExecResult['terminationReason']
   #maxOutputBytes: number
   #abortSignal: AbortSignal
   #onTimeoutCallback:
@@ -136,6 +145,7 @@ class ShellCommandImpl implements ShellCommand {
     if (self.#shouldAutoBackground && self.#onTimeoutCallback) {
       self.#onTimeoutCallback(self.background.bind(self))
     } else {
+      self.#killReason = 'timeout'
       self.#doKill(SIGTERM)
     }
   }
@@ -248,6 +258,7 @@ class ShellCommandImpl implements ShellCommand {
             this.#sizeWatchdog !== null
           ) {
             this.#killedForSize = true
+            this.#killReason = 'output_limit'
             this.#clearSizeWatchdog()
             this.#doKill(SIGKILL)
           }
@@ -295,11 +306,19 @@ class ShellCommandImpl implements ShellCommand {
     }
 
     const stdout = await this.taskOutput.getStdout()
+    const terminationReason = classifyShellTermination(
+      code,
+      this.#killReason === 'likely_oom' ? undefined : this.#killReason,
+    )
     const result: ExecResult = {
       code,
       stdout,
       stderr: this.taskOutput.getStderr(),
-      interrupted: code === SIGKILL,
+      interrupted:
+        terminationReason === 'user' ||
+        terminationReason === 'timeout' ||
+        terminationReason === 'output_limit',
+      terminationReason,
       backgroundTaskId: this.#backgroundTaskId,
     }
 
@@ -325,6 +344,11 @@ class ShellCommandImpl implements ShellCommand {
         `Command timed out after ${formatDuration(this.#timeout)}`,
         result.stderr,
       )
+    } else if (terminationReason === 'likely_oom') {
+      result.stderr = prependStderr(
+        'Command exited with code 137 and was likely killed by memory pressure. Do not retry the same command unchanged; reduce concurrency or split the work.',
+        result.stderr,
+      )
     }
 
     const resultResolver = this.#resultResolver
@@ -343,6 +367,7 @@ class ShellCommandImpl implements ShellCommand {
   }
 
   kill(): void {
+    this.#killReason = 'user'
     this.#doKill()
   }
 
@@ -421,6 +446,7 @@ class AbortedShellCommand implements ShellCommand {
       stdout: '',
       stderr: opts?.stderr ?? 'Command aborted before execution',
       interrupted: true,
+      terminationReason: 'user',
       backgroundTaskId: opts?.backgroundTaskId,
     })
   }

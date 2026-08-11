@@ -286,6 +286,43 @@ describe('createResponsesStream', () => {
     expect(events.at(-1)?.type).toBe('response.completed')
   })
 
+  test('retries an overloaded error received before stream output', async () => {
+    let attempts = 0
+    const fetchOverride = (async () => {
+      attempts += 1
+      if (attempts === 1) {
+        return sseResponse(
+          [
+            {
+              type: 'response.error',
+              error: {
+                message:
+                  'Our servers are currently overloaded. Please try again later.',
+              },
+            },
+          ],
+          { 'Retry-After': '0' },
+        )
+      }
+      return sseResponse([
+        {
+          type: 'response.completed',
+          response: { status: 'completed', usage: {} },
+        },
+      ])
+    }) as unknown as typeof fetch
+
+    const stream = await createResponsesStream({
+      request: responsesRequest,
+      signal: new AbortController().signal,
+      fetchOverride,
+    })
+    const events = await collectStream(stream)
+
+    expect(attempts).toBe(2)
+    expect(events.at(-1)?.type).toBe('response.completed')
+  })
+
   test('switches providers when a stream fails before semantic output', async () => {
     let primaryAttempts = 0
     const fetchOverride = (async (input: RequestInfo | URL) => {

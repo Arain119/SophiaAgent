@@ -13,6 +13,11 @@ import { z } from 'zod/v4'
 import type { ToolResultBlockParam } from '../Tool.js'
 import { buildTool } from '../Tool.js'
 import { lazySchema } from '../utils/lazySchema.js'
+import {
+  getSshPassword,
+  removeSshPassword,
+  setSshPassword,
+} from '../utils/sshCredentials.js'
 
 const inputSchema = lazySchema(() =>
   z
@@ -59,7 +64,7 @@ const inputSchema = lazySchema(() =>
         .refine(value => !/[\r\n]/.test(value), 'password must be one line')
         .optional()
         .describe(
-          'SSH password supplied by the user. It is reused in memory for this Sophia process, but not saved in connection profiles or returned by the tool.',
+          'SSH password supplied by the user. After successful authentication it is stored locally, reused across Sophia sessions, and never returned by the tool.',
         ),
       timeoutMs: z
         .number()
@@ -217,7 +222,9 @@ async function resolveConnection(input: Input): Promise<Connection> {
     port,
     identityFile: input.identityFile ?? saved?.identityFile,
     password:
-      input.password ?? sessionPasswords.get(passwordKey({ host, port })),
+      input.password ??
+      sessionPasswords.get(passwordKey({ host, port })) ??
+      getSshPassword(host, port ?? 22),
   }
 }
 
@@ -483,6 +490,17 @@ async function runRemoteCommand(input: Input): Promise<Output> {
   }
   if (input.password && !authenticationFailed(output)) {
     sessionPasswords.set(passwordKey(connection), input.password)
+    const credentialError = setSshPassword(
+      connection.host,
+      connection.port ?? 22,
+      input.password,
+    )
+    if (credentialError) {
+      output.stderr = `${output.stderr}${output.stderr ? '\n' : ''}${credentialError.message}`
+    }
+  } else if (authenticationFailed(output) && connection.password) {
+    sessionPasswords.delete(passwordKey(connection))
+    removeSshPassword(connection.host, connection.port ?? 22)
   }
   if (output.exitCode === 0) updateConnectionState(connection, 'ready')
   else if (authenticationFailed(output))
@@ -551,13 +569,17 @@ async function call(input: Input): Promise<Output> {
     await writeConnections(connections)
     if (input.password) {
       const parsedHost = parseSshHost(input.host!)
+      const port = input.port ?? parsedHost.port ?? 22
       sessionPasswords.set(
-        passwordKey({
-          host: parsedHost.host,
-          port: input.port ?? parsedHost.port,
-        }),
+        passwordKey({ host: parsedHost.host, port }),
         input.password,
       )
+      const credentialError = setSshPassword(
+        parsedHost.host,
+        port,
+        input.password,
+      )
+      if (credentialError) throw credentialError
     }
     return {
       stdout: `Saved SSH connection "${name}".\n`,
@@ -581,6 +603,11 @@ async function call(input: Input): Promise<Output> {
         port: parsedHost.port ?? removed.port,
       }),
     )
+    const credentialError = removeSshPassword(
+      parsedHost.host,
+      parsedHost.port ?? removed.port ?? 22,
+    )
+    if (credentialError) throw credentialError
     for (const [key, state] of connectionStates) {
       if (
         state.host === parsedHost.host &&
@@ -615,7 +642,7 @@ export const SSHRemoteTool = buildTool({
     return 'Save, reuse, inspect, and operate SSH connections with the local OpenSSH client.'
   },
   async prompt() {
-    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. A successfully used password is automatically reused in memory for later connections during this Sophia process; do not save it in connection profiles or repeat it in output. Save named connections only for reusable host/key settings; prefer the local SSH agent or private-key path when available.'
+    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available.'
   },
   renderToolUseMessage(input: Partial<Input>) {
     const target = input.name ?? input.host ?? ''

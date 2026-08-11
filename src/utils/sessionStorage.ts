@@ -85,6 +85,7 @@ import {
 } from './sessionStoragePortable.js'
 import { getSettings_DEPRECATED } from './settings/settings.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
+import { redactTranscriptSecrets } from './transcriptSecretRedaction.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { validateUuid } from './uuid.js'
 
@@ -4136,7 +4137,9 @@ export function cleanMessagesForLogging(
   messages: Message[],
   allMessages: readonly Message[] = messages,
 ): Transcript {
-  const filtered = messages.filter(isLoggableMessage) as Transcript
+  const filtered = redactTranscriptSecrets(
+    messages.filter(isLoggableMessage),
+  ) as Transcript
   return getUserType() !== 'ant'
     ? transformMessagesForExternalTranscript(
         filtered,
