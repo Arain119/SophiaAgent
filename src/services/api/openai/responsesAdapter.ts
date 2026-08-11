@@ -12,16 +12,26 @@ import {
 const MAX_RESPONSES_REQUEST_ATTEMPTS = 10
 const MAX_FAILOVER_PROVIDER_ATTEMPTS = 3
 const MAX_RETRY_DELAY_MS = 30_000
-// A short shared cooldown lets transient provider overload recover without
-// turning an otherwise healthy long task into a 30-minute blind spot. The
-// persisted retry window still prevents concurrent agents from stampeding.
 const DEFAULT_LONG_RETRY_DELAY_MS = 2 * 60 * 1000
+const DEFAULT_MAX_LONG_RETRY_DELAY_MS = 60 * 60 * 1000
 
-function longRetryDelayMs(): number {
-  const configured = Number(process.env.SOPHIA_API_LONG_RETRY_MS)
-  return Number.isFinite(configured) && configured >= 1000
-    ? Math.trunc(configured)
-    : DEFAULT_LONG_RETRY_DELAY_MS
+export function resolveLongRetryDelayMs(
+  attempt: number,
+  configuredBase = process.env.SOPHIA_API_LONG_RETRY_MS,
+  configuredMax = process.env.SOPHIA_API_LONG_RETRY_MAX_MS,
+): number {
+  const parsedBase = Number(configuredBase)
+  const parsedMax = Number(configuredMax)
+  const baseMs =
+    Number.isFinite(parsedBase) && parsedBase >= 1000
+      ? Math.trunc(parsedBase)
+      : DEFAULT_LONG_RETRY_DELAY_MS
+  const maxMs =
+    Number.isFinite(parsedMax) && parsedMax >= 1000
+      ? Math.trunc(parsedMax)
+      : DEFAULT_MAX_LONG_RETRY_DELAY_MS
+  const exponent = Math.max(0, Math.min(30, Math.trunc(attempt)))
+  return Math.min(baseMs * 2 ** exponent, maxMs)
 }
 
 function getMaxResponsesRequestAttempts(params: ResponsesStreamParams): number {
@@ -79,14 +89,15 @@ function retryWindowKey(params: ResponsesStreamParams): string {
 async function waitForLongRetry(
   params: ResponsesStreamParams,
   error: unknown,
+  attempt: number,
 ): Promise<void> {
   const key = retryWindowKey(params)
   const now = Date.now()
   const existingRetryAt = getProviderRetryAt(key)
-  const retryAt =
-    existingRetryAt && existingRetryAt > now
-      ? existingRetryAt
-      : now + longRetryDelayMs()
+  const retryAt = Math.max(
+    existingRetryAt ?? 0,
+    now + resolveLongRetryDelayMs(attempt),
+  )
   setProviderRetryAt(key, retryAt)
   const delayMs = Math.max(0, retryAt - now)
   logForDebugging(
@@ -97,6 +108,7 @@ async function waitForLongRetry(
 
 async function fetchResponsesWithLongRetry(
   params: ResponsesStreamParams,
+  backoff = { attempt: 0 },
 ): Promise<ResponsesFetchState> {
   while (true) {
     try {
@@ -111,7 +123,8 @@ async function fetchResponsesWithLongRetry(
       return state
     } catch (error) {
       if (!longRetryEnabled(params, error)) throw error
-      await waitForLongRetry(params, error)
+      await waitForLongRetry(params, error, backoff.attempt)
+      backoff.attempt += 1
     }
   }
 }
@@ -665,6 +678,7 @@ async function* streamResponsesWithRetry(
   initialState: ResponsesFetchState,
 ): AsyncGenerator<Record<string, unknown>, void> {
   let state = initialState
+  const longRetryBackoff = { attempt: 0 }
   while (true) {
     let outputStarted = false
     let completed = false
@@ -696,8 +710,9 @@ async function* streamResponsesWithRetry(
         if (nextProviderIndex >= (params.providers?.length ?? 0)) {
           if (!longRetryEnabled(params, error)) throw error
           await state.response.body?.cancel().catch(() => undefined)
-          await waitForLongRetry(params, error)
-          state = await fetchResponsesWithLongRetry(params)
+          await waitForLongRetry(params, error, longRetryBackoff.attempt)
+          longRetryBackoff.attempt += 1
+          state = await fetchResponsesWithLongRetry(params, longRetryBackoff)
           continue
         }
         await state.response.body?.cancel().catch(() => undefined)

@@ -3,6 +3,7 @@ import {
   buildResponsesRequest,
   createResponsesStream,
   extractUsage,
+  resolveLongRetryDelayMs,
 } from '../responsesAdapter.js'
 import { formatOpenAIPromptCacheKey } from '../openaiShared.js'
 import { computeHitRate } from '../../../../utils/cacheStats.js'
@@ -24,6 +25,24 @@ const responsesRequest = {
   input: [],
   prompt_cache_key: 'sophia:test',
 }
+
+describe('long provider retry backoff', () => {
+  test('grows exponentially from two minutes and caps at one hour', () => {
+    expect(
+      Array.from({ length: 8 }, (_, attempt) =>
+        resolveLongRetryDelayMs(attempt),
+      ),
+    ).toEqual([
+      120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000, 3_600_000,
+      3_600_000,
+    ])
+  })
+
+  test('supports configured base and maximum delays', () => {
+    expect(resolveLongRetryDelayMs(4, '1000', '10000')).toBe(10_000)
+    expect(resolveLongRetryDelayMs(2, 'invalid', '300000')).toBe(300_000)
+  })
+})
 
 function sseResponse(
   events: Array<Record<string, unknown>>,
