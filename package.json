@@ -1,6 +1,6 @@
 {
   "name": "sophiaagent",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Sophia Agent - a focused terminal AI coding assistant",
   "repository": {
     "type": "git",
@@ -53,7 +53,7 @@
     "setup:ripgrep": "node scripts/postinstall.cjs",
     "docs:dev": "npx mintlify dev",
     "typecheck": "tsc --noEmit",
-    "test:all": "bun run typecheck && bun run lint && bun test && bun run build && bun run health && bun run check:bundle",
+    "test:all": "bun run typecheck && bun run lint && bun test --max-concurrency=1 && bun run build && bun run health && bun run check:bundle",
     "precheck": "bun run test:all"
   },
   "dependencies": {
