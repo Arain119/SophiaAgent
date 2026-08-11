@@ -147,6 +147,7 @@ import {
   getProviderRetryStateSnapshot,
   subscribeProviderRetryState,
 } from '../services/api/openai/providerRetryState.js';
+import { getMemoryPressureSnapshot, subscribeMemoryPressure } from '../utils/memoryPressureController.js';
 import { GlobalKeybindingHandlers } from '../hooks/useGlobalKeybindings.js';
 import { CommandKeybindingHandlers } from '../hooks/useCommandKeybindings.js';
 import { KeybindingSetup } from '../keybindings/KeybindingProviderSetup.js';
@@ -4116,7 +4117,18 @@ export function REPL({
       minute: '2-digit',
     })}`;
   }, [providerRetryStates, isLoading]);
-  const runtimeSpinnerSuffix = providerRetrySuffix ?? stopHookSpinnerSuffix;
+  const memoryPressure = React.useSyncExternalStore(
+    subscribeMemoryPressure,
+    getMemoryPressureSnapshot,
+    getMemoryPressureSnapshot,
+  );
+  const memoryPressureSuffix = useMemo(() => {
+    if (memoryPressure.level === 'normal') return null;
+    const paused = memoryPressure.pausedTaskIds.length;
+    return `memory ${memoryPressure.level} ${Math.round(memoryPressure.ratio * 100)}%${paused > 0 ? ` · ${paused} paused` : ''}`;
+  }, [memoryPressure]);
+  const runtimeSpinnerSuffix =
+    [memoryPressureSuffix, providerRetrySuffix, stopHookSpinnerSuffix].filter(Boolean).join(' · ') || undefined;
 
   // Callback to capture frozen state when entering transcript mode
   const handleEnterTranscript = useCallback(() => {

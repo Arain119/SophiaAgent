@@ -23,6 +23,9 @@ export function TaskStatusText({ status, label, suffix }: TaskStatusTextProps): 
 }
 
 export function ShellProgress({ shell }: { shell: DeepImmutable<LocalShellTaskState> }): ReactNode {
+  if (shell.memoryPaused && shell.status === 'running') {
+    return <TaskStatusText status="running" label="memory paused" />;
+  }
   switch (shell.status) {
     case 'completed':
       return <TaskStatusText status="completed" label="done" />;

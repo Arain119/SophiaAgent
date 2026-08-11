@@ -14,6 +14,7 @@ import type { AgentId } from '../../types/ids.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
 import { tailFile } from '../../utils/fsOperations.js';
 import { logError } from '../../utils/log.js';
+import { registerMemoryManagedShellTask } from '../../utils/memoryPressureController.js';
 import { enqueuePendingNotification } from '../../utils/messageQueueManager.js';
 import type { ExecResult, ShellCommand } from '../../utils/ShellCommand.js';
 import { evictTaskOutput, getTaskOutputPath } from '../../utils/task/diskOutput.js';
@@ -147,7 +148,7 @@ function enqueueShellNotification(
       summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" completed${exitCode !== undefined ? ` (exit code ${exitCode})` : ''}`;
       break;
     case 'failed':
-      summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" failed${exitCode !== undefined ? ` with exit code ${exitCode}` : ''}${terminationReason === 'likely_oom' ? ' (likely memory pressure; split the work or reduce concurrency before retrying)' : ''}`;
+      summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" failed${exitCode !== undefined ? ` with exit code ${exitCode}` : ''}${terminationReason === 'likely_oom' ? ' (likely memory pressure; split the work or reduce concurrency before retrying)' : terminationReason === 'memory_pressure' ? ' (stopped before the container memory limit; wait for recovery or split the work)' : ''}`;
       break;
     case 'killed':
       summary = `${BACKGROUND_BASH_SUMMARY_PREFIX}"${description}" was stopped`;
@@ -168,6 +169,25 @@ function enqueueShellNotification(
     mode: 'task-notification',
     priority: 'later',
     agentId,
+  });
+}
+
+function startMemoryPressureManagement(
+  taskId: string,
+  description: string,
+  shellCommand: ShellCommand,
+  setAppState: SetAppState,
+  agentId?: AgentId,
+): () => void {
+  return registerMemoryManagedShellTask({
+    taskId,
+    description,
+    shellCommand,
+    agentId,
+    onPausedChange: memoryPaused =>
+      updateTaskState<LocalShellTaskState>(taskId, setAppState, task =>
+        task.memoryPaused === memoryPaused ? task : { ...task, memoryPaused },
+      ),
   });
 }
 
@@ -214,9 +234,17 @@ export async function spawnShellTask(
   shellCommand.background(taskId);
 
   const cancelStallWatchdog = startStallWatchdog(taskId, description, toolUseId, agentId);
+  const stopMemoryPressureManagement = startMemoryPressureManagement(
+    taskId,
+    description,
+    shellCommand,
+    setAppState,
+    agentId,
+  );
 
   void shellCommand.result.then(async result => {
     cancelStallWatchdog();
+    stopMemoryPressureManagement();
     await flushAndCleanup(shellCommand);
     let wasKilled = false;
 
@@ -333,10 +361,18 @@ function backgroundTask(taskId: string, getAppState: () => AppState, setAppState
   });
 
   const cancelStallWatchdog = startStallWatchdog(taskId, description, toolUseId, agentId);
+  const stopMemoryPressureManagement = startMemoryPressureManagement(
+    taskId,
+    description,
+    shellCommand,
+    setAppState,
+    agentId,
+  );
 
   // Set up result handler
   void shellCommand.result.then(async result => {
     cancelStallWatchdog();
+    stopMemoryPressureManagement();
     await flushAndCleanup(shellCommand);
     let wasKilled = false;
     let cleanupFn: (() => void) | undefined;
@@ -476,10 +512,18 @@ export function backgroundExistingForegroundTask(
   });
 
   const cancelStallWatchdog = startStallWatchdog(taskId, description, toolUseId, agentId);
+  const stopMemoryPressureManagement = startMemoryPressureManagement(
+    taskId,
+    description,
+    shellCommand,
+    setAppState,
+    agentId,
+  );
 
   // Set up result handler (mirrors backgroundTask's handler)
   void shellCommand.result.then(async result => {
     cancelStallWatchdog();
+    stopMemoryPressureManagement();
     await flushAndCleanup(shellCommand);
     let wasKilled = false;
     let cleanupFn: (() => void) | undefined;

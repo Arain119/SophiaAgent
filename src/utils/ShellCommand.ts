@@ -15,7 +15,12 @@ export type ExecResult = {
   stderr: string
   code: number
   interrupted: boolean
-  terminationReason?: 'user' | 'timeout' | 'output_limit' | 'likely_oom'
+  terminationReason?:
+    | 'user'
+    | 'timeout'
+    | 'output_limit'
+    | 'likely_oom'
+    | 'memory_pressure'
   backgroundTaskId?: string
   backgroundedByUser?: boolean
   /** Set when assistant-mode auto-backgrounded a long-running blocking command. */
@@ -34,6 +39,10 @@ export type ShellCommand = {
   background: (backgroundTaskId: string) => boolean
   result: Promise<ExecResult>
   kill: () => void
+  pause: () => boolean
+  resume: () => boolean
+  terminateForMemoryPressure: () => void
+  readonly pid?: number
   status: 'running' | 'backgrounded' | 'completed' | 'killed'
   /**
    * Cleans up stream resources (event listeners).
@@ -125,9 +134,11 @@ class ShellCommandImpl implements ShellCommand {
   #stdoutWrapper: StreamWrapper | null
   #stderrWrapper: StreamWrapper | null
   #childProcess: ChildProcess
+  #disposed = false
   #timeoutId: NodeJS.Timeout | null = null
   #sizeWatchdog: NodeJS.Timeout | null = null
   #killedForSize = false
+  #paused = false
   #killReason: ExecResult['terminationReason']
   #maxOutputBytes: number
   #abortSignal: AbortSignal
@@ -191,6 +202,10 @@ class ShellCommandImpl implements ShellCommand {
 
   get status(): 'running' | 'backgrounded' | 'completed' | 'killed' {
     return this.#status
+  }
+
+  get pid(): number | undefined {
+    return this.#disposed ? undefined : this.#childProcess.pid
   }
 
   #abortHandler(): void {
@@ -317,7 +332,8 @@ class ShellCommandImpl implements ShellCommand {
       interrupted:
         terminationReason === 'user' ||
         terminationReason === 'timeout' ||
-        terminationReason === 'output_limit',
+        terminationReason === 'output_limit' ||
+        terminationReason === 'memory_pressure',
       terminationReason,
       backgroundTaskId: this.#backgroundTaskId,
     }
@@ -349,6 +365,11 @@ class ShellCommandImpl implements ShellCommand {
         'Command exited with code 137 and was likely killed by memory pressure. Do not retry the same command unchanged; reduce concurrency or split the work.',
         result.stderr,
       )
+    } else if (terminationReason === 'memory_pressure') {
+      result.stderr = prependStderr(
+        'Command stopped by Sophia before the container memory limit was reached. Requeue it after memory recovers or split the work into smaller processes.',
+        result.stderr,
+      )
     }
 
     const resultResolver = this.#resultResolver
@@ -360,7 +381,7 @@ class ShellCommandImpl implements ShellCommand {
 
   #doKill(code?: number): void {
     this.#status = 'killed'
-    if (this.#childProcess.pid) {
+    if (!this.#disposed && this.#childProcess.pid) {
       treeKill(this.#childProcess.pid, 'SIGKILL')
     }
     this.#resolveExitCode(code ?? SIGKILL)
@@ -368,6 +389,46 @@ class ShellCommandImpl implements ShellCommand {
 
   kill(): void {
     this.#killReason = 'user'
+    this.#doKill()
+  }
+
+  pause(): boolean {
+    if (
+      process.platform === 'win32' ||
+      this.#disposed ||
+      this.#paused ||
+      this.#status !== 'backgrounded' ||
+      !this.#childProcess.pid
+    )
+      return false
+    try {
+      process.kill(-this.#childProcess.pid, 'SIGSTOP')
+      this.#paused = true
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  resume(): boolean {
+    if (
+      process.platform === 'win32' ||
+      this.#disposed ||
+      !this.#paused ||
+      !this.#childProcess.pid
+    )
+      return false
+    try {
+      process.kill(-this.#childProcess.pid, 'SIGCONT')
+      this.#paused = false
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  terminateForMemoryPressure(): void {
+    this.#killReason = 'memory_pressure'
     this.#doKill()
   }
 
@@ -391,6 +452,7 @@ class ShellCommandImpl implements ShellCommand {
   }
 
   cleanup(): void {
+    if (this.#disposed) return
     this.#stdoutWrapper?.cleanup()
     this.#stderrWrapper?.cleanup()
     this.taskOutput.clear()
@@ -399,6 +461,7 @@ class ShellCommandImpl implements ShellCommand {
     // crashes: kill() queues #handleExit as a microtask, cleanup() nulls
     // #abortSignal, then #handleExit runs #cleanupListeners() on the null ref.
     this.#cleanupListeners()
+    this.#disposed = true
     // Release references to allow GC of ChildProcess internals and AbortController chain
     this.#childProcess = null!
     this.#abortSignal = null!
@@ -457,6 +520,16 @@ class AbortedShellCommand implements ShellCommand {
 
   kill(): void {}
 
+  pause(): boolean {
+    return false
+  }
+
+  resume(): boolean {
+    return false
+  }
+
+  terminateForMemoryPressure(): void {}
+
   cleanup(): void {}
 }
 
@@ -486,6 +559,13 @@ export function createFailedCommand(preSpawnError: string): ShellCommand {
       return false
     },
     kill(): void {},
+    pause(): boolean {
+      return false
+    },
+    resume(): boolean {
+      return false
+    },
+    terminateForMemoryPressure(): void {},
     cleanup(): void {},
   }
 }

@@ -449,7 +449,7 @@ function toListItem(task: BackgroundTaskState): ListItem {
         id: task.id,
         type: 'local_bash',
         label: task.command,
-        status: task.status,
+        status: task.memoryPaused ? 'memory paused' : task.status,
         task,
       };
     case 'local_agent':
