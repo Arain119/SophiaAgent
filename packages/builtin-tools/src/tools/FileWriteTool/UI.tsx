@@ -5,7 +5,6 @@ import * as React from 'react';
 import { Suspense, use, useState } from 'react';
 import { MessageResponse } from 'src/components/MessageResponse.js';
 import { extractTag } from 'src/utils/messages.js';
-import { CtrlOToExpand } from 'src/components/CtrlOToExpand.js';
 import { FallbackToolUseErrorMessage } from 'src/components/FallbackToolUseErrorMessage.js';
 import { FileEditToolUpdatedMessage } from 'src/components/FileEditToolUpdatedMessage.js';
 import { FileEditToolUseRejectedMessage } from 'src/components/FileEditToolUseRejectedMessage.js';
@@ -70,7 +69,7 @@ function FileWriteToolCreatedMessage({
         </Box>
         {!verbose && plusLines > 0 && (
           <Text dimColor>
-            … +{plusLines} {plusLines === 1 ? 'line' : 'lines'} {numLines > 0 && <CtrlOToExpand />}
+            … +{plusLines} {plusLines === 1 ? 'line' : 'lines'}
           </Text>
         )}
       </Box>

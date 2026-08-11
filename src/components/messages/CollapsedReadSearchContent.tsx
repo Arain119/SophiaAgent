@@ -13,7 +13,6 @@ import { formatDuration, formatSecondsShort } from '../../utils/format.js';
 import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
 import type { buildMessageLookups } from '../../utils/messages.js';
 import type { ThemeName } from '../../utils/theme.js';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 import { useSelectedMessageBg } from '../messageActions.js';
 import { PrBadge } from '../PrBadge.js';
 import { ToolUseLoader } from '../ToolUseLoader.js';
@@ -64,12 +63,20 @@ function VerboseToolUse({
   const resultMsg = lookups.toolResultByToolUseID.get(content.id);
   const rawToolResult = resultMsg?.type === 'user' ? resultMsg.toolUseResult : undefined;
   const parsedOutput = tool.outputSchema?.safeParse(rawToolResult);
-  const toolResult = parsedOutput?.success ? parsedOutput.data : undefined;
+  const toolResult = parsedOutput?.success ? parsedOutput.data : tool.outputSchema ? undefined : rawToolResult;
 
   const parsedInput = tool.inputSchema.safeParse(content.input);
   const input = parsedInput.success ? parsedInput.data : undefined;
   const userFacingName = tool.userFacingName(input);
   const toolUseMessage = input ? tool.renderToolUseMessage(input, { theme, verbose: true }) : null;
+  const renderedToolResult =
+    isResolved && !isError && toolResult !== undefined
+      ? tool.renderToolResultMessage?.(toolResult as never, [], {
+          verbose: true,
+          tools,
+          theme,
+        })
+      : null;
 
   return (
     <Box key={content.id} flexDirection="column" marginTop={1} backgroundColor={bg}>
@@ -81,14 +88,8 @@ function VerboseToolUse({
         </Text>
         {input && tool.renderToolUseTag?.(input)}
       </Box>
-      {isResolved && !isError && toolResult !== undefined && (
-        <Box>
-          {tool.renderToolResultMessage?.(toolResult, [], {
-            verbose: true,
-            tools,
-            theme,
-          })}
-        </Box>
+      {renderedToolResult !== null && renderedToolResult !== undefined && (
+        <Box>{typeof renderedToolResult === 'string' ? <Text>{renderedToolResult}</Text> : renderedToolResult}</Box>
       )}
     </Box>
   );
@@ -127,11 +128,17 @@ export function CollapsedReadSearchContent({
   const maxListCountRef = useRef(0);
   const maxMcpCountRef = useRef(0);
   const maxBashCountRef = useRef(0);
+  const maxWriteCountRef = useRef(0);
+  const maxTaskCheckCountRef = useRef(0);
+  const maxOtherToolCountRef = useRef(0);
   maxReadCountRef.current = Math.max(maxReadCountRef.current, rawReadCount);
   maxSearchCountRef.current = Math.max(maxSearchCountRef.current, rawSearchCount);
   maxListCountRef.current = Math.max(maxListCountRef.current, rawListCount);
   maxMcpCountRef.current = Math.max(maxMcpCountRef.current, message.mcpCallCount ?? 0);
   maxBashCountRef.current = Math.max(maxBashCountRef.current, message.bashCount ?? 0);
+  maxWriteCountRef.current = Math.max(maxWriteCountRef.current, message.writeCount ?? 0);
+  maxTaskCheckCountRef.current = Math.max(maxTaskCheckCountRef.current, message.taskCheckCount ?? 0);
+  maxOtherToolCountRef.current = Math.max(maxOtherToolCountRef.current, message.otherToolCount ?? 0);
   const readCount = maxReadCountRef.current;
   const searchCount = maxSearchCountRef.current;
   const listCount = maxListCountRef.current;
@@ -140,7 +147,11 @@ export function CollapsedReadSearchContent({
   // same command isn't counted twice. gitOpBashCount is read live (no max-ref
   // needed — it's 0 until results arrive, then only grows).
   const gitOpBashCount = message.gitOpBashCount ?? 0;
-  const bashCount = isFullscreenEnvEnabled() ? Math.max(0, maxBashCountRef.current - gitOpBashCount) : 0;
+  const bashCount = Math.max(0, maxBashCountRef.current - gitOpBashCount);
+  const writeCount = maxWriteCountRef.current;
+  const taskCheckCount = maxTaskCheckCountRef.current;
+  const otherToolCount = maxOtherToolCountRef.current;
+  const errorCount = toolUseIds.filter(id => lookups.erroredToolUseIDs.has(id)).length;
 
   const hasNonMemoryOps =
     searchCount > 0 ||
@@ -149,6 +160,9 @@ export function CollapsedReadSearchContent({
     replCount > 0 ||
     mcpCallCount > 0 ||
     bashCount > 0 ||
+    writeCount > 0 ||
+    taskCheckCount > 0 ||
+    otherToolCount > 0 ||
     gitOpBashCount > 0;
 
   const readPaths = message.readFilePaths;
@@ -185,8 +199,10 @@ export function CollapsedReadSearchContent({
 
   const displayedHint = useMinDisplayTime(incomingHint, MIN_HINT_DISPLAY_MS);
 
-  // In verbose mode, render each tool use with its 1-line result summary
-  if (verbose) {
+  // Keep the newest activity expanded. As soon as assistant text follows,
+  // isActiveGroup becomes false and the same messages collapse to one line.
+  // Transcript mode (verbose) keeps every historical group expanded.
+  if (verbose || isActiveGroup) {
     const toolUses: NormalizedAssistantMessage[] = [];
     for (const msg of groupMessages) {
       if (msg.type === 'assistant') {
@@ -413,7 +429,18 @@ export function CollapsedReadSearchContent({
     );
   }
 
-  if (isFullscreenEnvEnabled() && bashCount > 0) {
+  if (writeCount > 0) {
+    const isFirst = nonMemParts.length === 0;
+    const verb = isFirst ? 'Updated' : 'updated';
+    if (!isFirst) nonMemParts.push(<Text key="comma-write">, </Text>);
+    nonMemParts.push(
+      <Text key="write">
+        {verb} <Text bold>{writeCount}</Text> {writeCount === 1 ? 'file' : 'files'}
+      </Text>,
+    );
+  }
+
+  if (bashCount > 0) {
     const isFirst = nonMemParts.length === 0;
     const verb = isActiveGroup ? (isFirst ? 'Running' : 'running') : isFirst ? 'Ran' : 'ran';
     if (!isFirst) {
@@ -422,6 +449,28 @@ export function CollapsedReadSearchContent({
     nonMemParts.push(
       <Text key="bash">
         {verb} <Text bold>{bashCount}</Text> bash {bashCount === 1 ? 'command' : 'commands'}
+      </Text>,
+    );
+  }
+
+  if (taskCheckCount > 0) {
+    const isFirst = nonMemParts.length === 0;
+    const verb = isFirst ? 'Checked' : 'checked';
+    if (!isFirst) nonMemParts.push(<Text key="comma-task">, </Text>);
+    nonMemParts.push(
+      <Text key="task">
+        {verb} <Text bold>{taskCheckCount}</Text> {taskCheckCount === 1 ? 'task' : 'tasks'}
+      </Text>,
+    );
+  }
+
+  if (otherToolCount > 0) {
+    const isFirst = nonMemParts.length === 0;
+    const verb = isFirst ? 'Used' : 'used';
+    if (!isFirst) nonMemParts.push(<Text key="comma-other">, </Text>);
+    nonMemParts.push(
+      <Text key="other">
+        {verb} <Text bold>{otherToolCount}</Text> {otherToolCount === 1 ? 'tool' : 'tools'}
       </Text>,
     );
   }
@@ -468,11 +517,17 @@ export function CollapsedReadSearchContent({
   return (
     <Box flexDirection="column" marginTop={1} backgroundColor={bg}>
       <Box flexDirection="row">
-        {isActiveGroup ? <ToolUseLoader shouldAnimate isUnresolved isError={anyError} /> : <Box minWidth={2} />}
+        {anyError ? <ToolUseLoader shouldAnimate={false} isUnresolved={false} isError /> : <Box minWidth={2} />}
         <Text dimColor={!isActiveGroup}>
           {nonMemParts}
           {memParts}
-          {isActiveGroup && <Text key="ellipsis">…</Text>} <CtrlOToExpand />
+          {errorCount > 0 && (
+            <Text color="error">
+              {hasNonMemoryOps || hasMemoryOps ? ', ' : ''}
+              {errorCount} failed
+            </Text>
+          )}
+          {isActiveGroup && <Text key="ellipsis">…</Text>}
         </Text>
       </Box>
       {isActiveGroup && displayedHint !== undefined && (

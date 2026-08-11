@@ -2,7 +2,7 @@ import type { ContentBlock, ToolResultBlockParam, ToolUseBlockParam } from '@ant
 type BetaContentBlock = ContentBlock | ToolResultBlockParam;
 import * as React from 'react';
 import { ConfigurableShortcutHint } from 'src/components/ConfigurableShortcutHint.js';
-import { CtrlOToExpand, SubAgentProvider } from 'src/components/CtrlOToExpand.js';
+import { SubAgentProvider } from 'src/components/CtrlOToExpand.js';
 import { Byline, KeyboardShortcutHint } from '@anthropic/ink';
 import type { z } from 'zod/v4';
 import { AgentProgressLine } from 'src/components/AgentProgressLine.js';
@@ -388,12 +388,6 @@ export function renderToolResultMessage(
           isStatic={true}
         />
       </MessageResponse>
-      {!isTranscriptMode && (
-        <Text dimColor>
-          {'  '}
-          <CtrlOToExpand />
-        </Text>
-      )}
     </Box>
   );
 }
@@ -598,7 +592,7 @@ export function renderToolUseProgressMessage(
         </SubAgentProvider>
         {hiddenToolUseCount > 0 && (
           <Text dimColor>
-            +{hiddenToolUseCount} more tool {hiddenToolUseCount === 1 ? 'use' : 'uses'} <CtrlOToExpand />
+            +{hiddenToolUseCount} more tool {hiddenToolUseCount === 1 ? 'use' : 'uses'}
           </Text>
         )}
       </Box>
@@ -814,7 +808,6 @@ export function renderGroupedAgentToolUse(
             </>
           )}{' '}
         </Text>
-        {!allAsync && <CtrlOToExpand />}
       </Box>
       {agentStats.map((stat, index) => (
         <AgentProgressLine

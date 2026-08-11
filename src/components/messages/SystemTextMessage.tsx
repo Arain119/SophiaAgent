@@ -21,7 +21,6 @@ import type {
 } from '../../types/message.js';
 import { SystemAPIErrorMessage } from './SystemAPIErrorMessage.js';
 import { formatDuration, formatNumber, formatSecondsShort } from '../../utils/format.js';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 import { useAppStateStore } from '../../state/AppState.js';
 import { isBackgroundTask, type TaskState } from '../../tasks/types.js';
 import { getPillLabel } from '../../tasks/pillLabel.js';
@@ -202,12 +201,6 @@ function StopHookSummaryMessage({
         <Text>
           Ran <Text bold>{hookCount}</Text> {message.hookLabel ?? 'stop'} {hookCount === 1 ? 'hook' : 'hooks'}
           {totalStr}
-          {!verbose && hookInfos.length > 0 && (
-            <>
-              {' '}
-              <CtrlOToExpand />
-            </>
-          )}
         </Text>
         {verbose &&
           hookInfos.length > 0 &&

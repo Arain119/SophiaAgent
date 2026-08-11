@@ -1,7 +1,6 @@
 import type { ThinkingBlock, ThinkingBlockParam } from '@anthropic-ai/sdk/resources/index.mjs';
 import React from 'react';
 import { Box, Text } from '@anthropic/ink';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 import { Markdown } from '../Markdown.js';
 
 type Props = {
@@ -36,7 +35,7 @@ export function AssistantThinkingMessage({
     return (
       <Box marginTop={addMargin ? 1 : 0}>
         <Text dimColor italic>
-          {label} <CtrlOToExpand />
+          {label}
         </Text>
       </Box>
     );

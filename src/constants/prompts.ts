@@ -20,6 +20,10 @@ import type { Tools } from '../Tool.js'
 import type { Command } from '../types/command.js'
 import { BASH_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/BashTool/toolName.js'
 import { POWERSHELL_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/PowerShellTool/toolName.js'
+import {
+  readEffectiveCpuQuota,
+  readMemoryUsage,
+} from '../utils/memoryPressureController.js'
 
 import { getSkillToolCommands } from 'src/commands.js'
 import { SKILL_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/SkillTool/constants.js'
@@ -161,7 +165,7 @@ function getSimpleDoingTasksSection(): string {
     `Avoid giving time estimates or predictions for how long tasks will take, whether for your own work or for users planning projects. Focus on what needs to be done, not how long it might take.`,
     `When the user asks to initialize, create, or update project instructions, inspect the repository and directly create or edit SOPHIA.md. Keep project instructions separate from auto-memory: SOPHIA.md contains durable repository rules, while auto-memory stores reusable experience across conversations.`,
     `If an approach fails, diagnose why before switching tactics—read the error, check your assumptions, try a focused fix. Don't retry the identical action blindly, but don't abandon a viable approach after a single failure either. Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when you're genuinely stuck after investigation, not as a first response to friction.`,
-    `Keep findings broad but fixes proportionate to reachable project behavior. Do not add hashes, compatibility layers, defensive scaffolding, or exotic edge-case handling unless they replace materially more expensive work or address a case reachable through supported inputs. Before running a check, identify the live uncertainty it can settle and what result would change your next action; do not re-run an unchanged passing check.`,
+    `Apply the HERO anti-overdefense contract: keep findings broad, but keep fixes proportionate to reachable behavior. H (hashing): add a digest only when it replaces a materially more expensive operation and changes the next action. E (edge cases): handle unusual inputs only when this project's supported use can actually produce them. R (rubrics): use judgement instead of scoring tables, checklists, or re-verifying a settled result. O (overbuild): do not add flags, compatibility layers, wrappers, or guards for hypothetical futures. Before every check, name the live uncertainty it can settle and what result would change next; do not repeat an unchanged passing check. This never overrides explicit security, migration, review, or verification requirements.`,
     `Be careful not to introduce security vulnerabilities such as command injection, XSS, SQL injection, and other OWASP top 10 vulnerabilities. If you notice that you wrote insecure code, immediately fix it. Prioritize writing safe, secure, and correct code. When working with security-sensitive code (authentication, encryption, API keys), err on the side of saying less about implementation details in your output — focus on the fix, not on explaining the vulnerability in detail.`,
     ...codeStyleSubitems,
     `Avoid backwards-compatibility hacks like renaming unused _vars, re-exporting types, adding // removed comments for removed code, etc. If you are certain that something is unused, you can delete it completely.`,
@@ -482,7 +486,12 @@ export async function computeSimpleEnvInfo(
   modelId: string,
   additionalWorkingDirectories?: string[],
 ): Promise<string> {
-  const [isGit, unameSR] = await Promise.all([getIsGit(), getUnameSR()])
+  const [isGit, unameSR, memory, effectiveCpuQuota] = await Promise.all([
+    getIsGit(),
+    getUnameSR(),
+    readMemoryUsage(),
+    readEffectiveCpuQuota(),
+  ])
 
   // Undercover: strip all model name/ID references. See computeEnvInfo.
   // DCE: inline the USER_TYPE check at each site — do NOT hoist to a const.
@@ -511,6 +520,11 @@ export async function computeSimpleEnvInfo(
     `Platform: ${env.platform}`,
     getShellInfoLine(),
     `OS Version: ${unameSR}`,
+    `Effective memory: ${formatGiB(memory.usedBytes)} / ${formatGiB(memory.limitBytes)} (${Math.round((memory.usedBytes / memory.limitBytes) * 100)}% used)`,
+    `Effective CPU quota: ${formatCpuCount(effectiveCpuQuota)} cores`,
+    effectiveCpuQuota < 1 || memory.usedBytes / memory.limitBytes >= 0.75
+      ? `Resources are constrained. Avoid parallel heavy processes; run tests by file or in small bounded batches, and isolate only cases that exceed the limit.`
+      : null,
     modelDescription,
 
     process.env.USER_TYPE === 'ant' && isUndercover()
@@ -523,6 +537,16 @@ export async function computeSimpleEnvInfo(
     `You have been invoked in the following environment: `,
     ...prependBullets(envItems),
   ].join(`\n`)
+}
+
+function formatGiB(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+}
+
+function formatCpuCount(count: number): string {
+  return Number.isInteger(count)
+    ? String(count)
+    : count.toFixed(2).replace(/0+$/, '')
 }
 
 function getShellInfoLine(): string {

@@ -3,6 +3,7 @@ import type { UUID } from 'crypto'
 import { findToolByName, type Tools } from '../Tool.js'
 import { extractBashCommentLabel } from '@sophia-agent/builtin-tools/tools/BashTool/commentLabel.js'
 import { BASH_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/BashTool/toolName.js'
+import { TASK_OUTPUT_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/TaskOutputTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/FileEditTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/FileWriteTool/prompt.js'
 import { REPL_TOOL_NAME } from '@sophia-agent/builtin-tools/tools/REPLTool/constants.js'
@@ -80,7 +81,19 @@ export type SearchOrReadResult = {
   mcpServerName?: string
   /** Bash command that is NOT a search/read (under fullscreen mode) */
   isBash?: boolean
+  /** Non-memory file write or edit. */
+  isWrite?: boolean
+  /** Non-blocking or blocking background task status retrieval. */
+  isTaskCheck?: boolean
+  /** Any remaining tool, summarized generically in compact mode. */
+  isOtherTool?: boolean
 }
+
+const TASK_OUTPUT_TOOL_NAMES = new Set([
+  TASK_OUTPUT_TOOL_NAME,
+  'AgentOutputTool',
+  'BashOutputTool',
+])
 
 /**
  * Extract the primary file/directory path from a tool_use input.
@@ -179,16 +192,32 @@ export function getSearchExtraToolsOrReadInfo(
     }
   }
 
-  // Memory file writes/edits are collapsible
-  if (isMemoryWriteOrEdit(toolName, toolInput)) {
+  // All file writes/edits collapse into the activity summary. Memory writes
+  // keep their dedicated wording; project files use "updated N files".
+  if (toolName === FILE_WRITE_TOOL_NAME || toolName === FILE_EDIT_TOOL_NAME) {
+    const isMemoryWrite = isMemoryWriteOrEdit(toolName, toolInput)
     return {
       isCollapsible: true,
       isSearch: false,
       isRead: false,
       isList: false,
       isREPL: false,
-      isMemoryWrite: true,
+      isMemoryWrite,
       isAbsorbedSilently: false,
+      isWrite: !isMemoryWrite,
+    }
+  }
+
+  if (TASK_OUTPUT_TOOL_NAMES.has(toolName)) {
+    return {
+      isCollapsible: true,
+      isSearch: false,
+      isRead: false,
+      isList: false,
+      isREPL: false,
+      isMemoryWrite: false,
+      isAbsorbedSilently: false,
+      isTaskCheck: true,
     }
   }
 
@@ -212,7 +241,7 @@ export function getSearchExtraToolsOrReadInfo(
   const tool =
     findToolByName(tools, toolName) ??
     findToolByName(getReplPrimitiveTools(), toolName)
-  if (!tool?.isSearchOrReadCommand) {
+  if (!tool) {
     return {
       isCollapsible: false,
       isSearch: false,
@@ -223,6 +252,19 @@ export function getSearchExtraToolsOrReadInfo(
       isAbsorbedSilently: false,
     }
   }
+  if (!tool.isSearchOrReadCommand) {
+    return {
+      isCollapsible: true,
+      isSearch: false,
+      isRead: false,
+      isList: false,
+      isREPL: false,
+      isMemoryWrite: false,
+      isAbsorbedSilently: false,
+      ...(tool.isMcp && { mcpServerName: tool.mcpInfo?.serverName }),
+      isOtherTool: !tool.isMcp,
+    }
+  }
   // The tool's isSearchOrReadCommand method handles its own input validation via safeParse,
   // so passing the raw input is safe. The type assertion is necessary because Tool[] uses
   // the default generic which expects { [x: string]: any }, but we receive unknown at runtime.
@@ -231,12 +273,9 @@ export function getSearchExtraToolsOrReadInfo(
   )
   const isList = result.isList ?? false
   const isCollapsible = result.isSearch || result.isRead || isList
-  // Under fullscreen mode, non-search/read Bash commands are also collapsible
-  // as their own category — "Ran N bash commands" instead of breaking the group.
+  const isBash = !isCollapsible && toolName === BASH_TOOL_NAME
   return {
-    isCollapsible:
-      isCollapsible ||
-      (isFullscreenEnvEnabled() ? toolName === BASH_TOOL_NAME : false),
+    isCollapsible: true,
     isSearch: result.isSearch,
     isRead: result.isRead,
     isList,
@@ -244,9 +283,8 @@ export function getSearchExtraToolsOrReadInfo(
     isMemoryWrite: false,
     isAbsorbedSilently: false,
     ...(tool.isMcp && { mcpServerName: tool.mcpInfo?.serverName }),
-    isBash: isFullscreenEnvEnabled()
-      ? !isCollapsible && toolName === BASH_TOOL_NAME
-      : undefined,
+    isBash,
+    isOtherTool: !isCollapsible && !isBash && !tool.isMcp,
   }
 }
 
@@ -266,6 +304,9 @@ export function getSearchOrReadFromContent(
   isAbsorbedSilently: boolean
   mcpServerName?: string
   isBash?: boolean
+  isWrite?: boolean
+  isTaskCheck?: boolean
+  isOtherTool?: boolean
 } | null {
   if (content?.type === 'tool_use' && content.name) {
     const info = getSearchExtraToolsOrReadInfo(
@@ -283,6 +324,9 @@ export function getSearchOrReadFromContent(
         isAbsorbedSilently: info.isAbsorbedSilently,
         mcpServerName: info.mcpServerName,
         isBash: info.isBash,
+        isWrite: info.isWrite,
+        isTaskCheck: info.isTaskCheck,
+        isOtherTool: info.isOtherTool,
       }
     }
   }
@@ -318,6 +362,9 @@ function getCollapsibleToolInfo(
   isAbsorbedSilently: boolean
   mcpServerName?: string
   isBash?: boolean
+  isWrite?: boolean
+  isTaskCheck?: boolean
+  isOtherTool?: boolean
 } | null {
   if (msg.type === 'assistant') {
     const content = getFirstContentItem(msg.message?.content)
@@ -663,6 +710,9 @@ type GroupAccumulator = {
   mcpServerNames?: Set<string>
   // Bash commands that aren't search/read (tracked separately for "Ran N bash commands")
   bashCount?: number
+  writeCount: number
+  taskCheckCount: number
+  otherToolCount: number
   // Bash tool_use_id → command string, so tool results can be scanned for
   // commit SHAs / PR URLs (surfaced as "committed abc123, created PR #42")
   bashCommands?: Map<string, string>
@@ -692,6 +742,9 @@ function createEmptyGroup(): GroupAccumulator {
     memorySearchCount: 0,
     memoryReadFilePaths: new Set(),
     memoryWriteCount: 0,
+    writeCount: 0,
+    taskCheckCount: 0,
+    otherToolCount: 0,
     nonMemSearchArgs: [],
     latestDisplayHint: undefined,
     hookTotalMs: 0,
@@ -700,9 +753,9 @@ function createEmptyGroup(): GroupAccumulator {
   }
   group.mcpCallCount = 0
   group.mcpServerNames = new Set()
+  group.bashCount = 0
+  group.bashCommands = new Map()
   if (isFullscreenEnvEnabled()) {
-    group.bashCount = 0
-    group.bashCommands = new Map()
     group.commits = []
     group.pushes = []
     group.branches = []
@@ -759,9 +812,12 @@ function createCollapsedGroup(
     result.mcpCallCount = group.mcpCallCount
     result.mcpServerNames = [...(group.mcpServerNames ?? [])]
   }
+  if ((group.bashCount ?? 0) > 0) result.bashCount = group.bashCount
+  if (group.writeCount > 0) result.writeCount = group.writeCount
+  if (group.taskCheckCount > 0) result.taskCheckCount = group.taskCheckCount
+  if (group.otherToolCount > 0) result.otherToolCount = group.otherToolCount
   if (isFullscreenEnvEnabled()) {
     if ((group.bashCount ?? 0) > 0) {
-      result.bashCount = group.bashCount
       result.gitOpBashCount = group.gitOpBashCount
     }
     if ((group.commits?.length ?? 0) > 0) result.commits = group.commits
@@ -830,7 +886,7 @@ export function collapseReadSearchGroups(
         if (input?.query) {
           currentGroup.latestDisplayHint = `"${input.query}"`
         }
-      } else if (isFullscreenEnvEnabled() && toolInfo.isBash) {
+      } else if (toolInfo.isBash) {
         // Non-search/read Bash command — counted separately so the summary
         // says "Ran N bash commands" instead of breaking the group.
         const count = countToolUses(msg)
@@ -848,6 +904,14 @@ export function collapseReadSearchGroups(
             currentGroup.bashCommands?.set(id, input.command)
           }
         }
+      } else if (toolInfo.isWrite) {
+        currentGroup.writeCount += countToolUses(msg)
+        const filePath = getFilePathFromToolInput(toolInfo.input)
+        if (filePath) currentGroup.latestDisplayHint = getDisplayPath(filePath)
+      } else if (toolInfo.isTaskCheck) {
+        currentGroup.taskCheckCount += countToolUses(msg)
+      } else if (toolInfo.isOtherTool) {
+        currentGroup.otherToolCount += countToolUses(msg)
       } else if (toolInfo.isList) {
         // Directory-listing bash commands (ls, tree, du) — counted separately
         // so the summary says "Listed N directories" instead of "Read N files".

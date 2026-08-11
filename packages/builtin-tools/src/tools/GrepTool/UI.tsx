@@ -1,6 +1,5 @@
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs';
 import React from 'react';
-import { CtrlOToExpand } from 'src/components/CtrlOToExpand.js';
 import { FallbackToolUseErrorMessage } from 'src/components/FallbackToolUseErrorMessage.js';
 import { MessageResponse } from 'src/components/MessageResponse.js';
 import { TOOL_SUMMARY_MAX_LENGTH } from 'src/constants/toolLimits.js';
@@ -64,7 +63,7 @@ function SearchResultSummary({
     <MessageResponse height={1}>
       <Text>
         {primaryText}
-        {secondaryText} {count > 0 && <CtrlOToExpand />}
+        {secondaryText}
       </Text>
     </MessageResponse>
   );

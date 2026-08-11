@@ -23,7 +23,6 @@ import { formatTeammateMessageContent } from './TeammateMessageFormatting.js';
 import { BLACK_CIRCLE } from '../../constants/figures.js';
 import { TeammateMessageContent } from './UserTeammateMessage.js';
 import { isShutdownApproved } from '../../utils/teammateMailbox.js';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 
 import { useSelectedMessageBg } from '../messageActions.js';
 
@@ -173,12 +172,6 @@ export function AttachmentMessage({ attachment, addMargin, verbose, isTranscript
             <Text dimColor>
               Recalled <Text bold>{attachment.memories.length}</Text>{' '}
               {attachment.memories.length === 1 ? 'memory' : 'memories'}
-              {!isTranscriptMode && (
-                <>
-                  {' '}
-                  <CtrlOToExpand />
-                </>
-              )}
             </Text>
           </Box>
           {(verbose || isTranscriptMode) &&

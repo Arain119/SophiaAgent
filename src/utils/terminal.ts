@@ -1,5 +1,4 @@
 import chalk from 'chalk'
-import { ctrlOToExpand } from '../components/CtrlOToExpand.js'
 import { stringWidth } from '@anthropic/ink'
 import sliceAnsi from './sliceAnsi.js'
 
@@ -102,11 +101,7 @@ export function renderTruncatedContent(
 
   return [
     aboveTheFold,
-    estimatedRemaining > 0
-      ? chalk.dim(
-          `… +${estimatedRemaining} lines${suppressExpandHint ? '' : ` ${ctrlOToExpand()}`}`,
-        )
-      : '',
+    estimatedRemaining > 0 ? chalk.dim(`… +${estimatedRemaining} lines`) : '',
   ]
     .filter(Boolean)
     .join('\n')

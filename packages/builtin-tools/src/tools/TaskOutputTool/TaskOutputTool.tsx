@@ -4,7 +4,6 @@ import { FallbackToolUseErrorMessage } from 'src/components/FallbackToolUseError
 import { FallbackToolUseRejectedMessage } from 'src/components/FallbackToolUseRejectedMessage.js';
 import { MessageResponse } from 'src/components/MessageResponse.js';
 import { Box, Text } from '@anthropic/ink';
-import { useShortcutDisplay } from 'src/keybindings/useShortcutDisplay.js';
 import type { TaskType } from 'src/Task.js';
 import type { Tool } from 'src/Tool.js';
 import { buildTool, type ToolDef } from 'src/Tool.js';
@@ -27,6 +26,9 @@ import { AgentPromptDisplay, AgentResponseDisplay } from '../AgentTool/UI.js';
 import BashToolResultMessage from '../BashTool/BashToolResultMessage.js';
 import { TASK_OUTPUT_TOOL_NAME } from './constants.js';
 
+const DEFAULT_RUNNING_MAX_CHARS = 4_000;
+const DEFAULT_COMPLETED_MAX_CHARS = 20_000;
+
 const inputSchema = lazySchema(() =>
   z.strictObject({
     task_id: z.string().describe('The task ID to get output from'),
@@ -34,7 +36,13 @@ const inputSchema = lazySchema(() =>
     timeout: z.number().min(0).max(600000).default(30000).describe('Max wait time in ms'),
     section: z.string().optional().describe('Optional result section heading to retrieve'),
     query: z.string().optional().describe('Optional case-insensitive keyword to search in the result'),
-    max_chars: z.number().int().min(500).max(100000).default(20000).describe('Maximum returned result characters'),
+    max_chars: z
+      .number()
+      .int()
+      .min(500)
+      .max(100000)
+      .optional()
+      .describe('Maximum returned result characters; defaults to 4,000 while running and 20,000 when complete'),
   }),
 );
 type InputSchema = ReturnType<typeof inputSchema>;
@@ -75,19 +83,19 @@ async function getTaskOutputData(
   task: TaskState,
   retrieval: { section?: string; query?: string; maxChars?: number } = {},
 ): Promise<TaskOutput> {
+  const maxChars = resolveTaskOutputMaxChars(task.status, retrieval.maxChars);
   let output: string;
   if (task.type === 'local_bash') {
     const bashTask = task as LocalShellTaskState;
     const taskOutputObj = bashTask.shellCommand?.taskOutput;
-    if (taskOutputObj) {
+    output = await getTaskOutput(task.id, maxChars);
+    if (!output && taskOutputObj && !taskOutputObj.stdoutToFile) {
       const stdout = await taskOutputObj.getStdout();
       const stderr = taskOutputObj.getStderr();
       output = [stdout, stderr].filter(Boolean).join('\n');
-    } else {
-      output = await getTaskOutput(task.id);
     }
   } else {
-    output = await getTaskOutput(task.id);
+    output = await getTaskOutput(task.id, maxChars);
   }
 
   const baseOutput: TaskOutput = {
@@ -137,6 +145,17 @@ async function getTaskOutputData(
   return baseOutput;
 }
 
+export function resolveTaskOutputMaxChars(status: string, requested?: number): number {
+  if (requested !== undefined) return requested;
+  return status === 'running' || status === 'pending' ? DEFAULT_RUNNING_MAX_CHARS : DEFAULT_COMPLETED_MAX_CHARS;
+}
+
+export function getTaskWaitPollDelay(elapsedMs: number): number {
+  if (elapsedMs < 1_000) return 250;
+  if (elapsedMs < 5_000) return 500;
+  return 1_000;
+}
+
 // Wait for task to complete
 async function waitForTaskCompletion(
   taskId: string,
@@ -163,8 +182,8 @@ async function waitForTaskCompletion(
       return task;
     }
 
-    // Wait before polling again
-    await sleep(100);
+    const elapsedMs = Date.now() - startTime;
+    await sleep(Math.min(getTaskWaitPollDelay(elapsedMs), timeoutMs - elapsedMs));
   }
 
   // Timeout - return current state
@@ -178,8 +197,8 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
   // Backwards-compatible aliases for renamed tools
   aliases: ['AgentOutputTool', 'BashOutputTool'],
 
-  userFacingName() {
-    return 'Task Output';
+  userFacingName(input) {
+    return input?.block === false ? 'Check task' : 'Wait for task';
   },
 
   get inputSchema(): InputSchema {
@@ -213,6 +232,8 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
 - Use max_chars to bound the returned context
 - Use block=true (default) to wait for task completion
 - Use block=false for non-blocking check of current status
+- Prefer one blocking wait over repeated polling; the task footer already shows live background status
+- Only poll again when new information can change your next action; do not poll the same task on a tight loop
 - Task IDs can be found using the /tasks command
 - Read the result file directly only when full raw access is needed`;
   },
@@ -357,11 +378,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     };
   },
 
-  renderToolUseMessage(input) {
-    const { block = true } = input;
-    if (!block) {
-      return 'non-blocking';
-    }
+  renderToolUseMessage() {
     return '';
   },
 
@@ -408,7 +425,6 @@ function TaskOutputResultDisplay({
   verbose?: boolean;
   theme: ThemeName;
 }): React.ReactNode {
-  const expandShortcut = useShortcutDisplay('app:toggleTranscript', 'Global', 'ctrl+o');
   const result: TaskOutputToolOutput = typeof content === 'string' ? jsonParse(content) : content;
 
   if (!result.task) {
@@ -420,6 +436,19 @@ function TaskOutputResultDisplay({
   }
 
   const { task } = result;
+
+  if (result.retrieval_status === 'not_ready' || result.retrieval_status === 'timeout') {
+    const progress = summarizeRunningTaskOutput(task.output);
+    return (
+      <MessageResponse>
+        <Text dimColor>
+          Running
+          {result.retrieval_status === 'timeout' && ' · check timed out'}
+          {progress && <> \u00b7 {progress}</>}
+        </Text>
+      </MessageResponse>
+    );
+  }
 
   // For shell tasks, render like BashToolResultMessage
   if (task.task_type === 'local_bash') {
@@ -467,23 +496,7 @@ function TaskOutputResultDisplay({
       }
       return (
         <MessageResponse>
-          <Text dimColor>Read output ({expandShortcut} to expand)</Text>
-        </MessageResponse>
-      );
-    }
-
-    if (result.retrieval_status === 'timeout' || task.status === 'running') {
-      return (
-        <MessageResponse>
-          <Text dimColor>Task is still running…</Text>
-        </MessageResponse>
-      );
-    }
-
-    if (result.retrieval_status === 'not_ready') {
-      return (
-        <MessageResponse>
-          <Text dimColor>Task is still running…</Text>
+          <Text dimColor>Read output</Text>
         </MessageResponse>
       );
     }
@@ -508,6 +521,21 @@ function TaskOutputResultDisplay({
       )}
     </Box>
   );
+}
+
+export function summarizeRunningTaskOutput(output: string): string | null {
+  const lines = output
+    .split(/\r?\n/u)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const latest = lines.at(-1);
+  if (!latest) {
+    return null;
+  }
+
+  const maxLatestLength = 120;
+  const clipped = latest.length > maxLatestLength ? `${latest.slice(0, maxLatestLength - 1)}…` : latest;
+  return lines.length === 1 ? clipped : `${clipped} · ${lines.length.toLocaleString()} lines`;
 }
 
 export default TaskOutputTool;

@@ -1,6 +1,5 @@
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs';
 import React from 'react';
-import { CtrlOToExpand } from 'src/components/CtrlOToExpand.js';
 import { FallbackToolUseErrorMessage } from 'src/components/FallbackToolUseErrorMessage.js';
 import { MessageResponse } from 'src/components/MessageResponse.js';
 import { Box, Text } from '@anthropic/ink';
@@ -85,7 +84,7 @@ function LSPResultSummary({
     <MessageResponse height={1}>
       <Text>
         {primaryText}
-        {secondaryText} {resultCount > 0 && <CtrlOToExpand />}
+        {secondaryText}
       </Text>
     </MessageResponse>
   );

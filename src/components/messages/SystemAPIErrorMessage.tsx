@@ -4,7 +4,6 @@ import { Box, Text } from '@anthropic/ink';
 import { formatAPIError } from '@ant/model-provider';
 import type { SystemAPIErrorMessage } from 'src/types/message.js';
 import { useInterval } from 'usehooks-ts';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 import { MessageResponse } from '../MessageResponse.js';
 
 const MAX_API_ERROR_CHARS = 1000;
@@ -43,7 +42,6 @@ export function SystemAPIErrorMessage({
     <MessageResponse>
       <Box flexDirection="column">
         <Text color="error">{truncated ? formatted.slice(0, MAX_API_ERROR_CHARS) + '…' : formatted}</Text>
-        {truncated && <CtrlOToExpand />}
         <Text dimColor>
           Retrying in {retryInSecondsLive} {retryInSecondsLive === 1 ? 'second' : 'seconds'}… (attempt {_retryAttempt}/
           {_maxRetries})

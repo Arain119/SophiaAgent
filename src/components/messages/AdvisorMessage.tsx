@@ -4,7 +4,6 @@ import { Box, Text } from '@anthropic/ink';
 import type { AdvisorBlock } from '../../utils/advisor.js';
 import { renderModelName } from '../../utils/model/model.js';
 import { jsonStringify } from '../../utils/slowOperations.js';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 import { MessageResponse } from '../MessageResponse.js';
 import { ToolUseLoader } from '../ToolUseLoader.js';
 
@@ -52,9 +51,7 @@ export function AdvisorMessage({
       body = verbose ? (
         <Text dimColor>{block.content.text}</Text>
       ) : (
-        <Text dimColor>
-          {figures.tick} Advisor has reviewed the conversation and will apply the feedback <CtrlOToExpand />
-        </Text>
+        <Text dimColor>{figures.tick} Advisor has reviewed the conversation and will apply the feedback</Text>
       );
       break;
     case 'advisor_redacted_result':

@@ -26,6 +26,7 @@ import type {
 } from '../types/message.js';
 import { type AdvisorBlock, isAdvisorBlock } from '../utils/advisor.js';
 import { collapseBackgroundBashNotifications } from '../utils/collapseBackgroundBashNotifications.js';
+import { collapseTaskOutputPolls } from '../utils/collapseTaskOutputPolls.js';
 import { collapseHookSummaries } from '../utils/collapseHookSummaries.js';
 import { collapseReadSearchGroups } from '../utils/collapseReadSearch.js';
 import { collapseTeammateShutdowns } from '../utils/collapseTeammateShutdowns.js';
@@ -414,7 +415,9 @@ const MessagesImpl = ({
     const { messages: groupedMessages } = applyGrouping(messagesToShow as MessageType[], tools, verbose);
 
     const collapsed = collapseBackgroundBashNotifications(
-      collapseHookSummaries(collapseTeammateShutdowns(collapseReadSearchGroups(groupedMessages, tools))),
+      collapseHookSummaries(
+        collapseTeammateShutdowns(collapseReadSearchGroups(collapseTaskOutputPolls(groupedMessages, verbose), tools)),
+      ),
       verbose,
     );
 

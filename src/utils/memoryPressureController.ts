@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { freemem, totalmem } from 'node:os'
+import { availableParallelism, freemem, totalmem } from 'node:os'
 import { promisify } from 'node:util'
 import type { AgentId } from '../types/ids.js'
 import { enqueuePendingNotification } from './messageQueueManager.js'
@@ -86,9 +86,19 @@ export function selectMemoryPressureAction(options: {
   return 'none'
 }
 
-async function readNumber(path: string): Promise<number | undefined> {
+type ResourceReadOptions = {
+  readFileText?: (path: string) => Promise<string>
+  freeMemory?: () => number
+  totalMemory?: () => number
+  hostCpuCount?: () => number
+}
+
+async function readNumber(
+  path: string,
+  readFileText: (path: string) => Promise<string>,
+): Promise<number | undefined> {
   try {
-    const value = (await readFile(path, 'utf8')).trim()
+    const value = (await readFileText(path)).trim()
     if (value === 'max') return undefined
     const parsed = Number(value)
     return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
@@ -97,10 +107,14 @@ async function readNumber(path: string): Promise<number | undefined> {
   }
 }
 
-export async function readMemoryUsage(): Promise<{
+export async function readMemoryUsage(
+  options: ResourceReadOptions = {},
+): Promise<{
   usedBytes: number
   limitBytes: number
 }> {
+  const readFileText =
+    options.readFileText ?? ((path: string) => readFile(path, 'utf8'))
   const candidates = [
     {
       used: '/sys/fs/cgroup/memory.current',
@@ -113,15 +127,49 @@ export async function readMemoryUsage(): Promise<{
   ]
   for (const candidate of candidates) {
     const [usedBytes, limitBytes] = await Promise.all([
-      readNumber(candidate.used),
-      readNumber(candidate.limit),
+      readNumber(candidate.used, readFileText),
+      readNumber(candidate.limit, readFileText),
     ])
     if (usedBytes && limitBytes && limitBytes < Number.MAX_SAFE_INTEGER) {
       return { usedBytes, limitBytes }
     }
   }
-  const limitBytes = totalmem()
-  return { usedBytes: limitBytes - freemem(), limitBytes }
+  const limitBytes = (options.totalMemory ?? totalmem)()
+  const freeBytes = (options.freeMemory ?? freemem)()
+  return { usedBytes: limitBytes - freeBytes, limitBytes }
+}
+
+export async function readEffectiveCpuQuota(
+  options: ResourceReadOptions = {},
+): Promise<number> {
+  const readFileText =
+    options.readFileText ?? ((path: string) => readFile(path, 'utf8'))
+  const hostCpuCount = Math.max(
+    1,
+    (options.hostCpuCount ?? availableParallelism)(),
+  )
+
+  try {
+    const [quotaText, periodText] = (
+      await readFileText('/sys/fs/cgroup/cpu.max')
+    )
+      .trim()
+      .split(/\s+/)
+    if (quotaText !== 'max') {
+      const quota = Number(quotaText)
+      const period = Number(periodText)
+      if (quota > 0 && period > 0) return Math.min(hostCpuCount, quota / period)
+    }
+  } catch {
+    // Fall through to cgroup v1 or the host CPU count.
+  }
+
+  const [quota, period] = await Promise.all([
+    readNumber('/sys/fs/cgroup/cpu/cpu.cfs_quota_us', readFileText),
+    readNumber('/sys/fs/cgroup/cpu/cpu.cfs_period_us', readFileText),
+  ])
+  if (quota && period) return Math.min(hostCpuCount, quota / period)
+  return hostCpuCount
 }
 
 async function updateTaskRss(): Promise<void> {

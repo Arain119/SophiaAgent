@@ -14,7 +14,6 @@ import {
 } from '../../services/api/errors.js';
 import { isEmptyMessageText, NO_RESPONSE_REQUESTED } from '../../utils/messages.js';
 import { isMacOsKeychainLocked } from '../../utils/secureStorage/macOsKeychainStorage.js';
-import { CtrlOToExpand } from '../CtrlOToExpand.js';
 import { InterruptedByUser } from '../InterruptedByUser.js';
 import { Markdown } from '../Markdown.js';
 import { MessageResponse } from '../MessageResponse.js';
@@ -97,7 +96,6 @@ export function AssistantTextMessage({ param: { text }, addMargin, shouldShowDot
                     ? `${text.slice(0, MAX_API_ERROR_CHARS)}...`
                     : text}
               </Text>
-              {truncated && <CtrlOToExpand />}
             </Box>
           </MessageResponse>
         );

@@ -1,8 +1,18 @@
 import { describe, expect, test } from 'bun:test'
 import {
   classifyMemoryPressure,
+  readEffectiveCpuQuota,
+  readMemoryUsage,
   selectMemoryPressureAction,
 } from '../memoryPressureController.js'
+
+function fileReader(files: Record<string, string>) {
+  return async (path: string): Promise<string> => {
+    const value = files[path]
+    if (value === undefined) throw new Error(`Missing test file: ${path}`)
+    return value
+  }
+}
 
 describe('memory pressure classification', () => {
   test('keeps normal concurrency below the warning threshold', () => {
@@ -69,5 +79,55 @@ describe('memory pressure classification', () => {
         ratio: 0.95,
       }),
     ).toBe('terminate')
+  })
+})
+
+describe('effective resource discovery', () => {
+  test('reads cgroup v2 memory usage and CPU quota', async () => {
+    const readFileText = fileReader({
+      '/sys/fs/cgroup/memory.current': String(1.5 * 1024 ** 3),
+      '/sys/fs/cgroup/memory.max': String(2 * 1024 ** 3),
+      '/sys/fs/cgroup/cpu.max': '50000 100000',
+    })
+
+    expect(await readMemoryUsage({ readFileText })).toEqual({
+      usedBytes: 1.5 * 1024 ** 3,
+      limitBytes: 2 * 1024 ** 3,
+    })
+    expect(
+      await readEffectiveCpuQuota({ readFileText, hostCpuCount: () => 64 }),
+    ).toBe(0.5)
+  })
+
+  test('falls back to cgroup v1 and caps quota to available host CPUs', async () => {
+    const readFileText = fileReader({
+      '/sys/fs/cgroup/cpu/cpu.cfs_quota_us': '800000',
+      '/sys/fs/cgroup/cpu/cpu.cfs_period_us': '100000',
+    })
+
+    expect(
+      await readEffectiveCpuQuota({ readFileText, hostCpuCount: () => 4 }),
+    ).toBe(4)
+  })
+
+  test('uses host resources when no cgroup limit is available', async () => {
+    const readFileText = fileReader({
+      '/sys/fs/cgroup/memory.max': 'max',
+      '/sys/fs/cgroup/cpu.max': 'max 100000',
+    })
+
+    expect(
+      await readMemoryUsage({
+        readFileText,
+        totalMemory: () => 16 * 1024 ** 3,
+        freeMemory: () => 10 * 1024 ** 3,
+      }),
+    ).toEqual({
+      usedBytes: 6 * 1024 ** 3,
+      limitBytes: 16 * 1024 ** 3,
+    })
+    expect(
+      await readEffectiveCpuQuota({ readFileText, hostCpuCount: () => 6 }),
+    ).toBe(6)
   })
 })

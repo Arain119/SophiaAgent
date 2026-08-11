@@ -3,7 +3,6 @@ import React, { useMemo } from 'react';
 import { useTerminalSize } from 'src/hooks/useTerminalSize.js';
 import type { ThemeName } from 'src/utils/theme.js';
 import type { Command } from '../../commands.js';
-import { BLACK_CIRCLE } from '../../constants/figures.js';
 import { Box, Text, stringWidth, useTheme } from '@anthropic/ink';
 import { useAppStateMaybeOutsideOfProvider } from '../../state/AppState.js';
 import { findToolByName, type Tool, type ToolProgressData, type Tools } from '../../Tool.js';
@@ -84,7 +83,9 @@ export function AssistantToolUseMessage({
   const { tool, input, userFacingToolName, userFacingToolNameBackgroundColor, isTransparentWrapper } = parsed;
 
   const isResolved = lookups.resolvedToolUseIDs.has(param.id);
+  const isError = lookups.erroredToolUseIDs.has(param.id);
   const isQueued = !inProgressToolUseIDs.has(param.id) && !isResolved;
+  const isQuiet = isResolved && !isError && !userFacingToolNameBackgroundColor;
 
   if (isTransparentWrapper) {
     if (isQueued || isResolved) return null;
@@ -127,31 +128,29 @@ export function AssistantToolUseMessage({
           {shouldShowDot &&
             (isQueued ? (
               <Box minWidth={2}>
-                <Text dimColor={isQueued}>{BLACK_CIRCLE}</Text>
+                <Text dimColor>\u00b7</Text>
               </Box>
             ) : (
               // WARNING: The code here and in ToolUseLoader is particularly
               // sensitive to what *should* just be trivial refactorings. See
               // the comment in ToolUseLoader for more details.
-              <ToolUseLoader
-                shouldAnimate={shouldAnimate}
-                isUnresolved={!isResolved}
-                isError={lookups.erroredToolUseIDs.has(param.id)}
-              />
+              <ToolUseLoader shouldAnimate={shouldAnimate} isUnresolved={!isResolved} isError={isError} />
             ))}
           <Box flexShrink={0}>
             <Text
-              bold
+              bold={!isQuiet}
               wrap="truncate-end"
               backgroundColor={userFacingToolNameBackgroundColor}
-              color={userFacingToolNameBackgroundColor ? 'inverseText' : undefined}
+              color={
+                userFacingToolNameBackgroundColor ? 'inverseText' : isError ? 'error' : isQuiet ? 'inactive' : undefined
+              }
             >
               {userFacingToolName}
             </Text>
           </Box>
           {renderedToolUseMessage !== '' && (
             <Box flexWrap="nowrap">
-              <Text>({renderedToolUseMessage})</Text>
+              <Text color={isQuiet ? 'inactive' : undefined}>({renderedToolUseMessage})</Text>
             </Box>
           )}
           {/* Render tool-specific tags (timeout, model, resume ID, etc.) */}

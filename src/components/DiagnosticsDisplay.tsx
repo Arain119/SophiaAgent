@@ -4,7 +4,6 @@ import { Box, Text } from '@anthropic/ink';
 import { DiagnosticTrackingService } from '../services/diagnosticTracking.js';
 import type { Attachment } from '../utils/attachments.js';
 import { getCwd } from '../utils/cwd.js';
-import { CtrlOToExpand } from './CtrlOToExpand.js';
 import { MessageResponse } from './MessageResponse.js';
 
 type DiagnosticsAttachment = Extract<Attachment, { type: 'diagnostics' }>;
@@ -66,7 +65,7 @@ export function DiagnosticsDisplay({ attachment, verbose }: DiagnosticsDisplayPr
       <MessageResponse>
         <Text dimColor wrap="wrap">
           Found <Text bold>{totalIssues}</Text> new diagnostic {totalIssues === 1 ? 'issue' : 'issues'} in {fileCount}{' '}
-          {fileCount === 1 ? 'file' : 'files'} <CtrlOToExpand />
+          {fileCount === 1 ? 'file' : 'files'}
         </Text>
       </MessageResponse>
     );

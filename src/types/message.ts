@@ -92,6 +92,9 @@ export type CollapsedReadSearchGroup = {
   mcpCallCount?: number
   mcpServerNames?: string[]
   bashCount?: number
+  writeCount?: number
+  taskCheckCount?: number
+  otherToolCount?: number
   gitOpBashCount?: number
   commits?: { sha: string; kind: CommitKind }[]
   pushes?: { branch: string }[]
