@@ -1,16 +1,14 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import type { DeepImmutable } from 'src/types/utils.js';
 import { useElapsedTime } from '../../hooks/useElapsedTime.js';
-import { type KeyboardEvent, Box, Text, useTheme } from '@anthropic/ink';
+import { type KeyboardEvent, Box, Text } from '@anthropic/ink';
 import { useKeybindings } from '../../keybindings/useKeybinding.js';
-import { getEmptyToolSafetyContext } from '../../Tool.js';
 import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
-import { getTools } from '../../tools.js';
 import { formatNumber } from '../../utils/format.js';
 import { extractTag } from '../../utils/messages.js';
+import { summarizeRecentActivities } from '../../utils/collapseReadSearch.js';
 import { Byline, Dialog, KeyboardShortcutHint } from '@anthropic/ink';
 import { UserPlanMessage } from '../messages/UserPlanMessage.js';
-import { renderToolActivity } from './renderToolActivity.js';
 import { getTaskStatusColor, getTaskStatusIcon } from './taskStatusUtils.js';
 
 type Props = {
@@ -21,12 +19,10 @@ type Props = {
 };
 
 export function AsyncAgentDetailDialog({ agent, onDone, onKillAgent, onBack }: Props): React.ReactNode {
-  const [theme] = useTheme();
-
-  // Get tools for rendering activity messages
-  const tools = useMemo(() => getTools(getEmptyToolSafetyContext()), []);
-
   const elapsedTime = useElapsedTime(agent.startTime, agent.status === 'running', 1000, agent.totalPausedMs ?? 0);
+  const progressSummary = agent.progress?.recentActivities
+    ? summarizeRecentActivities(agent.progress.recentActivities)
+    : undefined;
 
   // Restore confirm:yes (Enter/y) dismissal — Dialog handles confirm:no (Esc)
   // internally but does NOT auto-wire confirm:yes.
@@ -129,12 +125,9 @@ export function AsyncAgentDetailDialog({ agent, onDone, onKillAgent, onBack }: P
                 <Text bold dimColor>
                   Progress
                 </Text>
-                {agent.progress.recentActivities.map((activity, i) => (
-                  <Text key={i} dimColor={i < agent.progress!.recentActivities!.length - 1} wrap="truncate-end">
-                    {i === agent.progress!.recentActivities!.length - 1 ? '› ' : '  '}
-                    {renderToolActivity(activity, tools, theme)}
-                  </Text>
-                ))}
+                <Text dimColor wrap="truncate-end">
+                  {progressSummary ?? 'working'}
+                </Text>
               </Box>
             )}
 

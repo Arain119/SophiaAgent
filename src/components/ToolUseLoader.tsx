@@ -13,8 +13,8 @@ type Props = {
 export function ToolUseLoader({ isError, isUnresolved, shouldAnimate }: Props): React.ReactNode {
   const [ref, isBlinking] = useBlink(shouldAnimate);
 
-  const color = isUnresolved ? undefined : isError ? 'error' : 'inactive';
-  const indicator = isError ? '\u00d7' : isUnresolved ? BLACK_CIRCLE : '\u00b7';
+  const color = isUnresolved ? undefined : isError ? 'error' : 'success';
+  const indicator = isError ? '\u00d7' : isUnresolved ? BLACK_CIRCLE : '\u2713';
 
   // WARNING: The code here and in AssistantToolUseMessage is particularly
   // sensitive to what *should* just be trivial refactorings. A `<dim>x</dim>`

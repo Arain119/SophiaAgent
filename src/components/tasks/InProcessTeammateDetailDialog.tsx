@@ -1,16 +1,13 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import type { DeepImmutable } from 'src/types/utils.js';
 import { useElapsedTime } from '../../hooks/useElapsedTime.js';
-import { type KeyboardEvent, Box, Text, useTheme } from '@anthropic/ink';
+import { type KeyboardEvent, Box, Text } from '@anthropic/ink';
 import { useKeybindings } from '../../keybindings/useKeybinding.js';
-import { getEmptyToolSafetyContext } from '../../Tool.js';
 import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js';
-import { getTools } from '../../tools.js';
 import { formatNumber, truncateToWidth } from '../../utils/format.js';
 
 import { Byline, Dialog, KeyboardShortcutHint } from '@anthropic/ink';
 import { toInkColor } from '../../utils/ink.js';
-import { renderToolActivity } from './renderToolActivity.js';
 import { describeTeammateActivity } from './taskStatusUtils.js';
 
 type Props = {
@@ -27,9 +24,6 @@ export function InProcessTeammateDetailDialog({
   onBack,
   onForeground,
 }: Props): React.ReactNode {
-  const [theme] = useTheme();
-  const tools = useMemo(() => getTools(getEmptyToolSafetyContext()), []);
-
   const elapsedTime = useElapsedTime(
     teammate.startTime,
     teammate.status === 'running',
@@ -126,12 +120,9 @@ export function InProcessTeammateDetailDialog({
               <Text bold dimColor>
                 Progress
               </Text>
-              {teammate.progress.recentActivities.map((activity, i) => (
-                <Text key={i} dimColor={i < teammate.progress!.recentActivities!.length - 1} wrap="truncate-end">
-                  {i === teammate.progress!.recentActivities!.length - 1 ? '› ' : '  '}
-                  {renderToolActivity(activity, tools, theme)}
-                </Text>
-              ))}
+              <Text dimColor wrap="truncate-end">
+                {describeTeammateActivity(teammate)}
+              </Text>
             </Box>
           )}
 

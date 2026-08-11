@@ -4,9 +4,9 @@ import { renderToString } from '../../utils/staticRender.js';
 import { ToolUseLoader } from '../ToolUseLoader.js';
 
 describe('ToolUseLoader visual hierarchy', () => {
-  test('renders completed work as a quiet middle dot', async () => {
+  test('renders completed work as a check mark', async () => {
     const output = await renderToString(<ToolUseLoader isError={false} isUnresolved={false} shouldAnimate={false} />);
-    expect(output.trim()).toBe('·');
+    expect(output.trim()).toBe('✓');
   });
 
   test('renders failures as a cross', async () => {

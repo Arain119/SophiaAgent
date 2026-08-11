@@ -338,7 +338,7 @@ const shouldShowAntModelSwitch =
 const UndercoverAutoCallout =
   process.env.USER_TYPE === 'ant' ? require('../components/UndercoverAutoCallout.js').UndercoverAutoCallout : null;
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
-import { activityManager } from '../utils/activityManager.js';
+import { activityManager, shouldRecordUserActivity } from '../utils/activityManager.js';
 import { createAbortController } from '../utils/abortController.js';
 import { MCPConnectionManager } from 'src/services/mcp/MCPConnectionManager.js';
 import { useInstallMessages } from 'src/hooks/notifs/useInstallMessages.js';
@@ -1392,6 +1392,7 @@ export function REPL({
 
   const [pastedContents, setPastedContents] = useState<Record<number, PastedContent>>({});
   const [submitCount, setSubmitCount] = useState(0);
+  const lastSubmissionWasSlashCommandRef = useRef(false);
   // Ref instead of state to avoid triggering React re-renders on every
   // streaming text_delta. The spinner reads this via its animation timer.
   const responseLengthRef = useRef(0);
@@ -3294,6 +3295,7 @@ export function REPL({
       }
 
       if (submitsNow) {
+        lastSubmissionWasSlashCommandRef.current = isSlashCommand;
         setInputMode('prompt');
         setIDESelection(undefined);
         setSubmitCount(_ => _ + 1);
@@ -3749,6 +3751,7 @@ export function REPL({
   // Update last interaction time when input changes.
   // Must be immediate because useEffect runs after the Ink render cycle flush.
   useEffect(() => {
+    if (!shouldRecordUserActivity(inputValue, lastSubmissionWasSlashCommandRef.current)) return;
     activityManager.recordUserActivity();
     updateLastInteractionTime(true);
   }, [inputValue, submitCount]);

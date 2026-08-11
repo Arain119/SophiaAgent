@@ -5,6 +5,14 @@ type ActivityManagerOptions = {
   getActiveTimeCounter?: typeof getActiveTimeCounterImpl
 }
 
+export function shouldRecordUserActivity(
+  inputValue: string,
+  lastSubmissionWasSlashCommand: boolean,
+): boolean {
+  if (inputValue.trimStart().startsWith('/')) return false
+  return inputValue !== '' || !lastSubmissionWasSlashCommand
+}
+
 /**
  * ActivityManager handles generic activity tracking for both user and CLI operations.
  * It automatically deduplicates overlapping activities and provides separate metrics
