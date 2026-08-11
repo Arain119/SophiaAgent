@@ -4366,7 +4366,12 @@ export function REPL({
   // responsive); after the turn ends, showing messages immediately prevents a
   // jitter gap where the spinner is gone but the answer hasn't appeared yet.
   // Only reducedMotion users keep the deferred path during loading.
-  const usesSyncMessages = showStreamingText || !isLoading;
+  // Keep live tool/agent status visible immediately while a turn is running.
+  // useDeferredValue is still useful for large historical updates, but using
+  // it for the newest progress tick makes the UI appear stuck between tools.
+  const latestMessage = messages.at(-1);
+  const hasLiveStatusMessage = latestMessage?.type === 'progress' || latestMessage?.type === 'assistant';
+  const usesSyncMessages = showStreamingText || !isLoading || hasLiveStatusMessage;
   // When viewing an agent, never fall through to leader — empty until
   // bootstrap/stream fills. Closes the see-leader-type-agent footgun.
   const rawAgentMessages = viewedAgentTask?.messages;
