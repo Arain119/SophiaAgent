@@ -18,7 +18,9 @@ mock.module('src/utils/sessionStorage.js', () => ({
   writeAgentMetadata: async () => {},
 }))
 
+const realDiskOutput = await import('src/utils/task/diskOutput.js')
 mock.module('src/utils/task/diskOutput.js', () => ({
+  ...realDiskOutput,
   evictTaskOutput: noop,
   getTaskOutputPath: (id: string) => `/tmp/output/${id}`,
   initTaskOutputAsSymlink: async () => {},
