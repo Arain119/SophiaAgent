@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { getAllBaseTools } from '../../tools.js'
-import { sanitizeSshStderr, SSHRemoteTool } from '../SSHRemoteTool.js'
+import {
+  getSshProbeRetryDelayMs,
+  isSshFailureSafeToReplay,
+  sanitizeSshStderr,
+  SSHRemoteTool,
+} from '../SSHRemoteTool.js'
 
 describe('SSHRemoteTool', () => {
   test('is registered in the Core model tool pool', () => {
@@ -154,5 +159,39 @@ describe('SSHRemoteTool', () => {
       'fatal: repository not found',
     ].join('\n')
     expect(sanitizeSshStderr(stderr)).toBe('fatal: repository not found')
+  })
+
+  test('backs off connection probes from two minutes to a one-hour cap', () => {
+    expect([1, 2, 3, 4, 5, 6, 7].map(getSshProbeRetryDelayMs)).toEqual([
+      120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000, 3_600_000,
+    ])
+  })
+
+  test('only treats failures before remote execution as safe to replay', () => {
+    expect(isSshFailureSafeToReplay('ssh: connect: Connection refused')).toBe(
+      true,
+    )
+    expect(isSshFailureSafeToReplay('ssh: Could not resolve hostname')).toBe(
+      true,
+    )
+    expect(
+      isSshFailureSafeToReplay('client_loop: send disconnect: Broken pipe'),
+    ).toBe(false)
+    expect(isSshFailureSafeToReplay('Connection reset by peer')).toBe(false)
+  })
+
+  test('tells the agent to verify ambiguous remote outcomes before replay', () => {
+    const result = SSHRemoteTool.mapToolResultToToolResultBlockParam(
+      {
+        stdout: '',
+        stderr: 'Connection reset by peer',
+        exitCode: 255,
+        retryDisposition: 'unknown',
+        nextRetryAt: Date.parse('2026-08-12T12:02:00Z'),
+      },
+      'tool-3',
+    )
+    expect(result.content).toContain('verify remote state before replay')
+    expect(result.content).toContain('2026-08-12T12:02:00.000Z')
   })
 })

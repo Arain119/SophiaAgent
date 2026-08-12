@@ -113,7 +113,13 @@ const inputSchema = lazySchema(() =>
 
 type InputSchema = ReturnType<typeof inputSchema>
 type Input = z.infer<InputSchema>
-type Output = { stdout: string; stderr: string; exitCode: number }
+type Output = {
+  stdout: string
+  stderr: string
+  exitCode: number
+  retryDisposition?: 'safe' | 'unknown'
+  nextRetryAt?: number
+}
 type Connection = {
   host: string
   port?: number
@@ -137,7 +143,16 @@ const connectionPaths = new Map<string, string>()
 const sessionPasswords = new Map<string, string>()
 const connectionStates = new Map<string, ConnectionLifecycleState>()
 const connectionProbeTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const SSH_PROBE_RETRY_DELAY_MS = 30 * 60 * 1000
+const SSH_PROBE_BASE_DELAY_MS = 2 * 60 * 1000
+const SSH_PROBE_MAX_DELAY_MS = 60 * 60 * 1000
+
+export function getSshProbeRetryDelayMs(failureCount: number): number {
+  const exponent = Math.max(0, Math.floor(failureCount) - 1)
+  return Math.min(
+    SSH_PROBE_BASE_DELAY_MS * 2 ** exponent,
+    SSH_PROBE_MAX_DELAY_MS,
+  )
+}
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
@@ -275,9 +290,15 @@ function authenticationFailed(output: Output): boolean {
 function connectionFailed(output: Output): boolean {
   return (
     output.exitCode !== 0 &&
-    /connection (closed|refused|reset|timed out)|could not resolve|no route to host|broken pipe|control socket connect/i.test(
+    /connection (closed|refused|reset|timed out)|could not resolve|no route to host|broken pipe|control socket connect|ssh command timed out/i.test(
       `${output.stderr}\n${output.stdout}`,
     )
+  )
+}
+
+export function isSshFailureSafeToReplay(message: string): boolean {
+  return /connection refused|connection timed out|could not resolve|no route to host|control socket connect/i.test(
+    message,
   )
 }
 
@@ -300,14 +321,18 @@ function updateConnectionState(
   const previous = connectionStates.get(key)
   const now = Date.now()
   const failed = state === 'degraded' || state === 'blocked'
+  const failureCount = failed ? (previous?.failureCount ?? 0) + 1 : 0
   connectionStates.set(key, {
     state,
     host: connection.host,
     port: connection.port ?? 22,
-    failureCount: failed ? (previous?.failureCount ?? 0) + 1 : 0,
+    failureCount,
     lastSuccessAt: state === 'ready' ? now : previous?.lastSuccessAt,
     lastFailureAt: failed ? now : previous?.lastFailureAt,
-    nextRetryAt: failed ? now + SSH_PROBE_RETRY_DELAY_MS : undefined,
+    nextRetryAt:
+      state === 'degraded'
+        ? now + getSshProbeRetryDelayMs(failureCount)
+        : undefined,
     lastError: failed && output ? publicError(output) : undefined,
   })
   if (state === 'ready' || state === 'disconnected' || state === 'blocked') {
@@ -323,6 +348,13 @@ function scheduleConnectionProbe(
 ): void {
   const key = connectionKey(connection)
   if (connectionProbeTimers.has(key)) return
+  const state = connectionStates.get(key)
+  const delayMs = Math.max(
+    0,
+    (state?.nextRetryAt ??
+      Date.now() + getSshProbeRetryDelayMs(state?.failureCount ?? 1)) -
+      Date.now(),
+  )
   const timer = setTimeout(() => {
     connectionProbeTimers.delete(key)
     void (async () => {
@@ -346,7 +378,7 @@ function scheduleConnectionProbe(
         scheduleConnectionProbe(connection, controlPath)
       }
     })()
-  }, SSH_PROBE_RETRY_DELAY_MS)
+  }, delayMs)
   timer.unref?.()
   connectionProbeTimers.set(key, timer)
 }
@@ -500,12 +532,19 @@ async function runRemoteCommand(input: Input): Promise<Output> {
     ? `cd -- ${shellQuote(input.cwd)} && ${command}`
     : command
   updateConnectionState(connection, 'connecting')
-  let output = await spawnSsh(
+  let output: Output = await spawnSsh(
     [...args, connection.host, remoteCommand],
     timeoutMs,
     connection.password,
+  ).catch(error => ({
+    stdout: '',
+    stderr: error instanceof Error ? error.message : String(error),
+    exitCode: 1,
+  }))
+  const safeToReplay = isSshFailureSafeToReplay(
+    `${output.stderr}\n${output.stdout}`,
   )
-  if (input.action === 'test' && connectionFailed(output)) {
+  if (connectionFailed(output) && (input.action === 'test' || safeToReplay)) {
     await unlink(controlPath).catch(() => {})
     for (const delayMs of [500, 1500]) {
       await new Promise(resolve => setTimeout(resolve, delayMs))
@@ -540,6 +579,9 @@ async function runRemoteCommand(input: Input): Promise<Output> {
     await unlink(controlPath).catch(() => {})
     updateConnectionState(connection, 'degraded', output)
     scheduleConnectionProbe(connection, controlPath)
+    const state = connectionStates.get(key)
+    output.retryDisposition = safeToReplay ? 'safe' : 'unknown'
+    output.nextRetryAt = state?.nextRetryAt
   }
   return output
 }
@@ -672,7 +714,7 @@ export const SSHRemoteTool = buildTool({
     return 'Save, reuse, inspect, and operate SSH connections with the local OpenSSH client.'
   },
   async prompt() {
-    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available.'
+    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available. A transient connection failure is not a reason to abandon a long task: continue independent local work and retry when the reported nextRetryAt is reached. If a write command reports an unknown execution outcome, inspect remote state before deciding whether to run it again.'
   },
   renderToolUseMessage(input: Partial<Input>) {
     const target = input.name ?? input.host ?? ''
@@ -716,6 +758,13 @@ export const SSHRemoteTool = buildTool({
     const parts = [`exit code: ${data.exitCode}`]
     if (data.stdout) parts.push(`stdout:\n${data.stdout}`)
     if (data.stderr) parts.push(`stderr:\n${data.stderr}`)
+    if (data.retryDisposition) {
+      parts.push(
+        data.retryDisposition === 'safe'
+          ? `retry: safe after ${data.nextRetryAt ? new Date(data.nextRetryAt).toISOString() : 'the connection recovers'}`
+          : `retry: verify remote state before replay${data.nextRetryAt ? `; connection probe scheduled for ${new Date(data.nextRetryAt).toISOString()}` : ''}`,
+      )
+    }
     return {
       tool_use_id: toolUseID,
       type: 'tool_result',
