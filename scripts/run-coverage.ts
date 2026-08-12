@@ -32,6 +32,7 @@ for (const [index, files] of batches.entries()) {
   const partName = String(index).padStart(3, '0')
   const partDir = join(partsDir, partName)
   const coverageArg = `coverage/parts/${partName}`
+  await mkdir(partDir, { recursive: true })
   const child = Bun.spawn(
     [
       'bun',
