@@ -20,9 +20,8 @@ const all = Array.from(glob.scanSync({ cwd: root, onlyFiles: true }))
 const isolatedSet = new Set(isolated)
 const remaining = all.filter(path => !isolatedSet.has(path))
 const batches = isolated.map(path => [path])
-const batchSize = process.platform === 'win32' ? 1 : 20
-for (let index = 0; index < remaining.length; index += batchSize) {
-  batches.push(remaining.slice(index, index + batchSize))
+for (const path of remaining) {
+  batches.push([path])
 }
 
 await rm(coverageDir, { recursive: true, force: true })
