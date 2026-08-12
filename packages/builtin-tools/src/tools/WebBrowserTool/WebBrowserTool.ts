@@ -25,6 +25,9 @@ const inputSchema = lazySchema(() =>
         'type',
         'evaluate',
         'console',
+        'status',
+        'request_user',
+        'resume',
         'close',
       ])
       .describe('Browser action to perform.'),
@@ -75,10 +78,12 @@ export const WebBrowserTool = buildTool({
   },
 
   async description() {
-    return "Control Sophia's integrated Chromium browser for navigation, interaction, screenshots, and console inspection."
+    return "Control Sophia's visible, persistent Chrome browser for autonomous navigation, interaction, screenshots, and human handoff."
   },
   async prompt() {
-    return `Use Sophia's integrated browser for real web rendering and frontend verification. It launches and manages Chrome, Edge, or Chromium directly; no browser extension or user browser session is required.
+    return `Use Sophia's dedicated visible browser for real web automation. It launches and manages a persistent Chrome, Edge, or Chromium profile directly; no browser extension or access to the user's everyday browser is required. Login state persists across Sophia sessions.
+
+Operate autonomously by default. Request human intervention only when a step cannot reasonably be automated, such as password entry, CAPTCHA, passkey, QR-code login, or an explicitly protected confirmation. For handoff: call request_user, then use AskUserQuestion to wait until the user confirms completion, then call resume. While human control is active, do not attempt other browser actions. Resume always returns a fresh page snapshot; do not rely on pre-handoff page state.
 
 Actions:
 - navigate: load a URL and return an accessibility-oriented page snapshot
@@ -88,16 +93,19 @@ Actions:
 - type: fill a locator with text
 - evaluate: execute JavaScript in the page
 - console: read browser console messages and page errors
+- status: report whether Sophia or the user currently controls the browser
+- request_user: pause Sophia browser actions so the user can intervene in the visible window
+- resume: reclaim control after the user confirms completion and return a fresh snapshot
 - close: close the managed browser session
 
-For frontend work, start the development server, navigate to it, capture screenshots at desktop and mobile viewports, inspect console errors, interact with the changed workflow, and iterate until the rendered result is correct.`
+For frontend verification, start the development server, navigate to it, capture screenshots at desktop and mobile viewports, inspect console errors, interact with the changed workflow, and iterate until the rendered result is correct.`
   },
 
   isConcurrencySafe() {
     return false
   },
   isReadOnly(input: BrowserInput) {
-    return ['navigate', 'snapshot', 'screenshot', 'console'].includes(
+    return ['navigate', 'snapshot', 'screenshot', 'console', 'status'].includes(
       input.action,
     )
   },
@@ -163,7 +171,12 @@ For frontend work, start the development server, navigate to it, capture screens
         },
       })
     }
-    return { tool_use_id: toolUseID, type: 'tool_result', content }
+    return {
+      tool_use_id: toolUseID,
+      type: 'tool_result',
+      content,
+      is_error: output.failed === true,
+    }
   },
 
   async call(input: BrowserInput) {
@@ -175,6 +188,7 @@ For frontend work, start the development server, navigate to it, capture screens
           title: 'Browser error',
           url: input.url ?? '',
           content: error instanceof Error ? error.message : String(error),
+          failed: true,
         },
       }
     }

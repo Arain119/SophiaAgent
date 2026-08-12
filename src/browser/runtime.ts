@@ -1,11 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import type {
-  Browser,
-  BrowserContext,
-  LaunchOptions,
-  Page,
-} from 'playwright-core'
+import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import type { BrowserContext, LaunchOptions, Page } from 'playwright-core'
 import { registerCleanup } from '../utils/cleanupRegistry.js'
+import { getSophiaConfigHomeDir } from '../utils/envUtils.js'
 
 export type BrowserViewport = { width: number; height: number }
 
@@ -18,6 +16,9 @@ export type BrowserActionRequest = {
     | 'type'
     | 'evaluate'
     | 'console'
+    | 'status'
+    | 'request_user'
+    | 'resume'
     | 'close'
   url?: string
   selector?: string
@@ -35,12 +36,13 @@ export type BrowserActionOutput = {
   screenshot?: string
   console?: string[]
   errors?: string[]
+  failed?: boolean
 }
 
 type DirectBrowserState = {
-  browser: Browser
   context: BrowserContext
   page: Page
+  pausedForUser: boolean
 }
 
 type HostResponse = {
@@ -67,6 +69,9 @@ type BrowserHost = {
 const DEFAULT_VIEWPORT: BrowserViewport = { width: 1440, height: 900 }
 const MAX_TEXT_LENGTH = 50_000
 const HOST_REQUEST_TIMEOUT_MS = 45_000
+const BROWSER_PROFILE_DIR = join(getSophiaConfigHomeDir(), 'browser-profile')
+const SENSITIVE_URL_PARAM =
+  /^(?:access_token|auth|authorization|code|credential|id_token|key|otp|password|secret|session|sig|signature|token)$/i
 const consoleMessages: string[] = []
 const pageErrors: string[] = []
 
@@ -81,9 +86,11 @@ const DEFAULT_VIEWPORT = { width: 1440, height: 900 }
 const MAX_TEXT_LENGTH = 50000
 const consoleMessages = []
 const pageErrors = []
-let browser
+const sensitiveUrlParam = /^(?:access_token|auth|authorization|code|credential|id_token|key|otp|password|secret|session|sig|signature|token)$/i
 let context
 let page
+let pausedForUser = false
+const profilePath = process.env.SOPHIA_BROWSER_PROFILE
 
 function remember(list, value) {
   list.push(value)
@@ -96,16 +103,60 @@ function truncate(value) {
     : value
 }
 
+function safeUrl(value) {
+  if (value.startsWith('data:') || value.startsWith('javascript:')) {
+    return value.split(':', 1)[0] + ':[redacted]'
+  }
+  try {
+    const parsed = new URL(value)
+    parsed.username = ''
+    parsed.password = ''
+    for (const key of parsed.searchParams.keys()) {
+      if (sensitiveUrlParam.test(key)) parsed.searchParams.set(key, '[redacted]')
+    }
+    parsed.hash = ''
+    return parsed.toString()
+  } catch {
+    return value
+  }
+}
+
+async function redactSensitiveValues(currentPage, content) {
+  const values = await currentPage
+    .locator('input[type="password"], input[autocomplete="one-time-code"]')
+    .evaluateAll(inputs => inputs.map(input => input.value).filter(Boolean))
+    .catch(() => [])
+  return values.reduce((safe, value) => safe.split(value).join('[sensitive input]'), content)
+}
+
+async function redactSensitiveLists(currentPage, values) {
+  return Promise.all(values.map(value => redactSensitiveValues(currentPage, value)))
+}
+
+function watchPage(currentPage) {
+  currentPage.on('console', message => {
+    remember(consoleMessages, '[' + message.type() + '] ' + message.text())
+  })
+  currentPage.on('pageerror', error => {
+    remember(pageErrors, error.message)
+  })
+}
+
 async function launchBrowser() {
+  if (!profilePath) throw new Error('SOPHIA_BROWSER_PROFILE is required')
   const attempts = [
-    { channel: 'chrome', headless: true, timeout: 15000 },
-    { channel: 'msedge', headless: true, timeout: 15000 },
-    { headless: true, timeout: 15000 },
+    { channel: 'chrome', headless: false, timeout: 15000 },
+    { channel: 'msedge', headless: false, timeout: 15000 },
+    { headless: false, timeout: 15000 },
   ]
   const errors = []
   for (const options of attempts) {
     try {
-      return await chromium.launch(options)
+      return await chromium.launchPersistentContext(profilePath, {
+        ...options,
+        viewport: null,
+        args: ['--start-maximized'],
+      })
     } catch (error) {
       errors.push(error instanceof Error ? error.message.split('\n')[0] : String(error))
     }
@@ -117,22 +168,16 @@ async function launchBrowser() {
 }
 
 async function ensurePage(viewport = DEFAULT_VIEWPORT) {
-  if (!browser || !browser.isConnected()) {
-    browser = await launchBrowser()
-    context = await browser.newContext({
-      viewport,
-      colorScheme: 'light',
-      reducedMotion: 'reduce',
-    })
-    page = await context.newPage()
-    page.on('console', message => {
-      remember(consoleMessages, '[' + message.type() + '] ' + message.text())
-    })
-    page.on('pageerror', error => {
-      remember(pageErrors, error.message)
-    })
+  if (!context) {
+    context = await launchBrowser()
+    page = context.pages()[0] ?? await context.newPage()
+    for (const currentPage of context.pages()) watchPage(currentPage)
+    context.on('page', watchPage)
   }
-  await page.setViewportSize(viewport)
+  const latestPage = context.pages().filter(candidate => !candidate.isClosed()).at(-1)
+  if (latestPage && latestPage !== page) page = latestPage
+  if (!page || page.isClosed()) page = await context.newPage()
+  if (viewport) await page.setViewportSize(viewport)
   return page
 }
 
@@ -145,8 +190,8 @@ async function summary() {
     .catch(() => '')
   return {
     title: await currentPage.title(),
-    url: currentPage.url(),
-    content: truncate(content),
+    url: safeUrl(currentPage.url()),
+    content: truncate(await redactSensitiveValues(currentPage, content)),
   }
 }
 
@@ -158,13 +203,41 @@ function required(request, field) {
 
 async function handle(request) {
   if (request.action === 'close') {
-    await browser?.close().catch(() => undefined)
-    browser = undefined
+    await context?.close().catch(() => undefined)
     context = undefined
     page = undefined
+    pausedForUser = false
     consoleMessages.length = 0
     pageErrors.length = 0
     return { title: 'Browser closed', url: '' }
+  }
+
+  if (request.action === 'status') {
+    const current = await summary()
+    return {
+      ...current,
+      content: ((pausedForUser ? 'Human control is active.' : 'Sophia control is active.') + '\n\n' + (current.content ?? '')).trim(),
+    }
+  }
+  if (request.action === 'request_user') {
+    await ensurePage(request.viewport)
+    pausedForUser = true
+    const current = await summary()
+    return {
+      ...current,
+      content: ('Human control is active. Ask the user to complete the required browser step, then call resume after they confirm.\n\n' + (current.content ?? '')).trim(),
+    }
+  }
+  if (request.action === 'resume') {
+    pausedForUser = false
+    const current = await summary()
+    return {
+      ...current,
+      content: ('Sophia control resumed.\n\n' + (current.content ?? '')).trim(),
+    }
+  }
+  if (pausedForUser) {
+    throw new Error('Browser control is paused for the user. Wait for confirmation, then call resume.')
   }
 
   const currentPage = await ensurePage(request.viewport)
@@ -190,6 +263,7 @@ async function handle(request) {
     const screenshot = await currentPage.screenshot({
       type: 'png',
       fullPage: request.fullPage ?? false,
+      mask: [currentPage.locator('input[type="password"], input[autocomplete="one-time-code"]')],
     })
     return { ...await summary(), screenshot: screenshot.toString('base64') }
   }
@@ -212,9 +286,9 @@ async function handle(request) {
   }
   return {
     title: await currentPage.title(),
-    url: currentPage.url(),
-    console: [...consoleMessages],
-    errors: [...pageErrors],
+    url: safeUrl(currentPage.url()),
+    console: await redactSensitiveLists(currentPage, consoleMessages),
+    errors: await redactSensitiveLists(currentPage, pageErrors),
   }
 }
 
@@ -247,7 +321,7 @@ process.stdin.on('data', chunk => {
   }
 })
 process.stdin.on('end', async () => {
-  await browser?.close().catch(() => undefined)
+  await context?.close().catch(() => undefined)
   process.exit(0)
 })
 `
@@ -263,22 +337,79 @@ function truncate(value: string): string {
     : value
 }
 
+export function sanitizeBrowserUrl(value: string): string {
+  if (value.startsWith('data:') || value.startsWith('javascript:')) {
+    return `${value.split(':', 1)[0]}:[redacted]`
+  }
+  try {
+    const parsed = new URL(value)
+    parsed.username = ''
+    parsed.password = ''
+    for (const key of parsed.searchParams.keys()) {
+      if (SENSITIVE_URL_PARAM.test(key)) {
+        parsed.searchParams.set(key, '[redacted]')
+      }
+    }
+    parsed.hash = ''
+    return parsed.toString()
+  } catch {
+    return value
+  }
+}
+
+async function redactSensitiveValues(
+  page: Page,
+  content: string,
+): Promise<string> {
+  const values = await page
+    .locator('input[type="password"], input[autocomplete="one-time-code"]')
+    .evaluateAll(inputs =>
+      inputs.map(input => (input as HTMLInputElement).value).filter(Boolean),
+    )
+    .catch(() => [] as string[])
+  return values.reduce(
+    (safe, value) => safe.replaceAll(value, '[sensitive input]'),
+    content,
+  )
+}
+
+async function redactSensitiveLists(
+  page: Page,
+  values: string[],
+): Promise<string[]> {
+  return Promise.all(values.map(value => redactSensitiveValues(page, value)))
+}
+
+function watchPage(page: Page): void {
+  page.on('console', message => {
+    remember(consoleMessages, `[${message.type()}] ${message.text()}`)
+  })
+  page.on('pageerror', error => {
+    remember(pageErrors, error.message)
+  })
+}
+
 function shouldUseBrowserHost(): boolean {
   return process.platform === 'win32' && typeof Bun !== 'undefined'
 }
 
-async function launchBrowser(): Promise<Browser> {
+async function launchBrowser(): Promise<BrowserContext> {
   const { chromium } = await import('playwright-core')
   const attempts: LaunchOptions[] = [
-    { channel: 'chrome', headless: true, timeout: 15_000 },
-    { channel: 'msedge', headless: true, timeout: 15_000 },
-    { headless: true, timeout: 15_000 },
+    { channel: 'chrome', headless: false, timeout: 15_000 },
+    { channel: 'msedge', headless: false, timeout: 15_000 },
+    { headless: false, timeout: 15_000 },
   ]
   const errors: string[] = []
 
   for (const options of attempts) {
     try {
-      return await chromium.launch(options)
+      await mkdir(BROWSER_PROFILE_DIR, { recursive: true, mode: 0o700 })
+      return await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, {
+        ...options,
+        viewport: null,
+        args: ['--start-maximized'],
+      })
     } catch (error) {
       errors.push(
         error instanceof Error ? error.message.split('\n')[0]! : String(error),
@@ -291,40 +422,35 @@ async function launchBrowser(): Promise<Browser> {
   )
 }
 
-async function createDirectState(
-  viewport: BrowserViewport,
-): Promise<DirectBrowserState> {
-  const browser = await launchBrowser()
-  const context = await browser.newContext({
-    viewport,
-    colorScheme: 'light',
-    reducedMotion: 'reduce',
-  })
-  const page = await context.newPage()
-  page.on('console', message => {
-    remember(consoleMessages, `[${message.type()}] ${message.text()}`)
-  })
-  page.on('pageerror', error => {
-    remember(pageErrors, error.message)
-  })
-  browser.on('disconnected', () => {
+async function createDirectState(): Promise<DirectBrowserState> {
+  const context = await launchBrowser()
+  const page = context.pages()[0] ?? (await context.newPage())
+  for (const currentPage of context.pages()) watchPage(currentPage)
+  context.on('page', watchPage)
+  context.on('close', () => {
     directStatePromise = undefined
   })
 
   unregisterCleanup?.()
   unregisterCleanup = registerCleanup(async () => {
     directStatePromise = undefined
-    await browser.close().catch(() => undefined)
+    await context.close().catch(() => undefined)
   })
-  return { browser, context, page }
+  return { context, page, pausedForUser: false }
 }
 
 async function getDirectState(
   viewport: BrowserViewport = DEFAULT_VIEWPORT,
 ): Promise<DirectBrowserState> {
-  directStatePromise ??= createDirectState(viewport)
+  directStatePromise ??= createDirectState()
   const state = await directStatePromise
-  await state.page.setViewportSize(viewport)
+  const latestPage = state.context
+    .pages()
+    .filter(candidate => !candidate.isClosed())
+    .at(-1)
+  if (latestPage && latestPage !== state.page) state.page = latestPage
+  if (state.page.isClosed()) state.page = await state.context.newPage()
+  if (viewport) await state.page.setViewportSize(viewport)
   return state
 }
 
@@ -337,8 +463,8 @@ async function directSummary(): Promise<BrowserActionOutput> {
     .catch(() => '')
   return {
     title: await page.title(),
-    url: page.url(),
-    content: truncate(content),
+    url: sanitizeBrowserUrl(page.url()),
+    content: truncate(await redactSensitiveValues(page, content)),
   }
 }
 
@@ -363,13 +489,45 @@ async function executeDirectAction(
     consoleMessages.length = 0
     pageErrors.length = 0
     if (current) {
-      const { browser } = await current
-      await browser.close().catch(() => undefined)
+      const { context } = await current
+      await context.close().catch(() => undefined)
     }
     return { title: 'Browser closed', url: '' }
   }
 
-  const { page } = await getDirectState(request.viewport)
+  const state = await getDirectState(request.viewport)
+  if (request.action === 'status') {
+    const current = await directSummary()
+    return {
+      ...current,
+      content:
+        `${state.pausedForUser ? 'Human control is active.' : 'Sophia control is active.'}\n\n${current.content ?? ''}`.trim(),
+    }
+  }
+  if (request.action === 'request_user') {
+    state.pausedForUser = true
+    const current = await directSummary()
+    return {
+      ...current,
+      content:
+        `Human control is active. Ask the user to complete the required browser step, then call resume after they confirm.\n\n${current.content ?? ''}`.trim(),
+    }
+  }
+  if (request.action === 'resume') {
+    state.pausedForUser = false
+    const current = await directSummary()
+    return {
+      ...current,
+      content: `Sophia control resumed.\n\n${current.content ?? ''}`.trim(),
+    }
+  }
+  if (state.pausedForUser) {
+    throw new Error(
+      'Browser control is paused for the user. Wait for confirmation, then call resume.',
+    )
+  }
+
+  const { page } = state
   if (request.action === 'navigate') {
     consoleMessages.length = 0
     pageErrors.length = 0
@@ -392,6 +550,11 @@ async function executeDirectAction(
     const screenshot = await page.screenshot({
       type: 'png',
       fullPage: request.fullPage ?? false,
+      mask: [
+        page.locator(
+          'input[type="password"], input[autocomplete="one-time-code"]',
+        ),
+      ],
     })
     return {
       ...(await directSummary()),
@@ -419,9 +582,9 @@ async function executeDirectAction(
   }
   return {
     title: await page.title(),
-    url: page.url(),
-    console: [...consoleMessages],
-    errors: [...pageErrors],
+    url: sanitizeBrowserUrl(page.url()),
+    console: await redactSensitiveLists(page, consoleMessages),
+    errors: await redactSensitiveLists(page, pageErrors),
   }
 }
 
@@ -486,12 +649,14 @@ function handleHostStdout(host: BrowserHost, chunk: string): void {
 
 async function createBrowserHost(): Promise<BrowserHost> {
   const playwrightUrl = import.meta.resolve('playwright-core')
+  await mkdir(BROWSER_PROFILE_DIR, { recursive: true, mode: 0o700 })
   const child = spawn(
     'node',
     ['--input-type=module', '-e', BROWSER_HOST_SOURCE, playwrightUrl],
     {
       stdio: 'pipe',
       windowsHide: true,
+      env: { ...process.env, SOPHIA_BROWSER_PROFILE: BROWSER_PROFILE_DIR },
     },
   )
   const host: BrowserHost = {
