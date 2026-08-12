@@ -45,4 +45,4 @@ jobs:
           bun run scripts/run-coverage.ts
 
       - name: Build
-        run: bun run build
+        run: bun run test:all

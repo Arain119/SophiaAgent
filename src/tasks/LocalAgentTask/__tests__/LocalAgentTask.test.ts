@@ -9,7 +9,9 @@ const noop = () => {}
 mock.module('src/utils/debug.ts', debugMock)
 mock.module('src/utils/log.ts', logMock)
 
+const realSessionStorage = await import('src/utils/sessionStorage.js')
 mock.module('src/utils/sessionStorage.js', () => ({
+  ...realSessionStorage,
   getAgentTranscriptPath: (id: string) => `/tmp/transcripts/${id}.jsonl`,
   recordSidechainTranscript: async () => {},
   recordQueueOperation: noop,
@@ -31,10 +33,14 @@ mock.module('src/utils/messageQueueManager.js', () => ({
   },
 }))
 
+const realBootstrapState = await import('src/bootstrap/state.js')
 mock.module('src/bootstrap/state.js', () => ({
+  ...realBootstrapState,
+  getCwdState: () => '/test/project',
   getSdkAgentProgressSummariesEnabled: () => false,
   getSessionId: () => 'test-session-001',
   getProjectRoot: () => '/test/project',
+  getOriginalCwd: () => '/test/project',
   getIsNonInteractiveSession: () => false,
   addSlowOperation: noop,
 }))
