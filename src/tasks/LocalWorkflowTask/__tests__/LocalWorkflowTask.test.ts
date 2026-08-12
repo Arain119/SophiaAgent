@@ -20,7 +20,9 @@ mock.module('src/constants/xml.js', () => ({
   TASK_TYPE_TAG: 'task_type',
 }))
 
+const realMessageQueueManager = await import('src/utils/messageQueueManager.js')
 mock.module('src/utils/messageQueueManager.js', () => ({
+  ...realMessageQueueManager,
   enqueuePendingNotification: () => {},
 }))
 

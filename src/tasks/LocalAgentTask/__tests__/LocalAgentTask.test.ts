@@ -29,7 +29,9 @@ mock.module('src/utils/task/diskOutput.js', () => ({
 
 // Capture enqueuePendingNotification calls for verification
 const enqueuedNotifications: string[] = []
+const realMessageQueueManager = await import('src/utils/messageQueueManager.js')
 mock.module('src/utils/messageQueueManager.js', () => ({
+  ...realMessageQueueManager,
   enqueuePendingNotification: (cmd: any) => {
     enqueuedNotifications.push(cmd.value)
   },

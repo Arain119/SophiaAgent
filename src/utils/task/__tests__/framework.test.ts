@@ -21,7 +21,9 @@ mock.module('src/utils/task/diskOutput.js', () => ({
   initTaskOutputAsSymlink: async () => {},
 }))
 
+const realMessageQueueManager = await import('src/utils/messageQueueManager.js')
 mock.module('src/utils/messageQueueManager.js', () => ({
+  ...realMessageQueueManager,
   enqueuePendingNotification: noop,
 }))
 
