@@ -34,6 +34,7 @@ export type ExecutionSnapshotTask = {
   workflowRunId?: string
   workflowPhase?: string
   workflowAgents?: ExecutionSnapshotAgent[]
+  elapsedMs: number
 }
 
 export type ExecutionSnapshot = {
@@ -41,6 +42,34 @@ export type ExecutionSnapshot = {
   activeCount: number
   tasks: ExecutionSnapshotTask[]
   omittedCount: number
+}
+
+function formatElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h${minutes % 60}m`
+}
+
+export function formatExecutionStatus(
+  snapshot: ExecutionSnapshot | null,
+  maxLength = 100,
+): string | undefined {
+  if (!snapshot || snapshot.tasks.length === 0) return undefined
+  const task = snapshot.tasks.reduce((selected, candidate) =>
+    candidate.elapsedMs > selected.elapsedMs ? candidate : selected,
+  )
+  const phase = task.workflowPhase ?? task.status
+  const activity = task.activity ?? task.summary ?? task.description
+  const count =
+    snapshot.activeCount > 1 ? ` · ${snapshot.activeCount} active` : ''
+  const full = `${phase} · ${activity} · ${formatElapsed(task.elapsedMs)}${count}`
+  if (full.length <= maxLength) return full
+  const fixed = `${phase} ·  · ${formatElapsed(task.elapsedMs)}${count}`
+  const available = Math.max(8, maxLength - fixed.length)
+  return `${phase} · ${activity.slice(0, available - 3)}... · ${formatElapsed(task.elapsedMs)}${count}`
 }
 
 function compactText(value: string | undefined): string | undefined {
@@ -168,6 +197,7 @@ export function createExecutionSnapshot(
       status: task.status,
       description: compactText(task.description) ?? task.type,
       outputFile: task.outputFile,
+      elapsedMs: Math.max(0, now - task.startTime),
       ...(taskDetail(task) ? { detail: taskDetail(task) } : {}),
       ...progressFields(task),
       ...(workNode ? { workNodeId: workNode.id } : {}),

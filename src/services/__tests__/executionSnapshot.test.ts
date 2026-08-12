@@ -3,7 +3,11 @@ import type { AppState } from '../../state/AppState.js'
 import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { LocalWorkflowTaskState } from '../../tasks/LocalWorkflowTask/LocalWorkflowTask.js'
 import type { RunProgress } from '../../workflow/progress/store.js'
-import { createExecutionSnapshot } from '../executionSnapshot.js'
+import {
+  createExecutionSnapshot,
+  type ExecutionSnapshot,
+  formatExecutionStatus,
+} from '../executionSnapshot.js'
 import {
   openWorkNode,
   recordWorkNodeInputTokens,
@@ -79,6 +83,7 @@ describe('createExecutionSnapshot', () => {
       tokenCount: 900,
       workNodeId: 'a-running',
       workNodeContextTokens: 750,
+      elapsedMs: 10_000,
     })
   })
 
@@ -136,5 +141,28 @@ describe('createExecutionSnapshot', () => {
         },
       ],
     })
+  })
+
+  test('formats one compact real-time status line', () => {
+    const snapshot: ExecutionSnapshot = {
+      type: 'execution_snapshot',
+      activeCount: 2,
+      omittedCount: 0,
+      tasks: [
+        {
+          id: 'task-1',
+          type: 'local_agent',
+          status: 'running',
+          description: 'Release verification',
+          outputFile: '/tmp/task-1',
+          activity: 'Running isolated tests',
+          elapsedMs: 3_661_000,
+        },
+      ],
+    }
+    expect(formatExecutionStatus(snapshot)).toBe(
+      'running · Running isolated tests · 1h1m · 2 active',
+    )
+    expect(formatExecutionStatus(snapshot, 40)?.length).toBeLessThanOrEqual(40)
   })
 })

@@ -148,6 +148,8 @@ import {
   subscribeProviderRetryState,
 } from '../services/api/openai/providerRetryState.js';
 import { getMemoryPressureSnapshot, subscribeMemoryPressure } from '../utils/memoryPressureController.js';
+import { createExecutionSnapshot, formatExecutionStatus } from '../services/executionSnapshot.js';
+import { getWorkflowRunSnapshots } from '../workflow/progress/runtimeSnapshot.js';
 import { GlobalKeybindingHandlers } from '../hooks/useGlobalKeybindings.js';
 import { CommandKeybindingHandlers } from '../hooks/useCommandKeybindings.js';
 import { KeybindingSetup } from '../keybindings/KeybindingProviderSetup.js';
@@ -4131,8 +4133,27 @@ export function REPL({
     const paused = memoryPressure.pausedTaskIds.length;
     return `memory ${memoryPressure.level} ${Math.round(memoryPressure.ratio * 100)}%${paused > 0 ? ` · ${paused} paused` : ''}`;
   }, [memoryPressure]);
-  const runtimeSpinnerSuffix =
+  const hasActiveExecution = useMemo(
+    () => Object.values(tasks).some(task => task.status === 'pending' || task.status === 'running'),
+    [tasks],
+  );
+  const [executionStatusNow, setExecutionStatusNow] = useState(Date.now());
+  useEffect(() => {
+    if (!hasActiveExecution) return;
+    setExecutionStatusNow(Date.now());
+    const timer = setInterval(() => setExecutionStatusNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [hasActiveExecution]);
+  const executionStatusSuffix = useMemo(
+    () =>
+      formatExecutionStatus(createExecutionSnapshot(store.getState(), getWorkflowRunSnapshots(), executionStatusNow)),
+    [tasks, store, executionStatusNow],
+  );
+  const backgroundRuntimeSuffix =
     [memoryPressureSuffix, providerRetrySuffix, stopHookSpinnerSuffix].filter(Boolean).join(' · ') || undefined;
+
+  const runtimeSpinnerSuffix =
+    [executionStatusSuffix, backgroundRuntimeSuffix].filter(Boolean).join(' · ') || undefined;
 
   // Callback to capture frozen state when entering transcript mode
   const handleEnterTranscript = useCallback(() => {

@@ -83,6 +83,7 @@ import {
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { Stream } from '../../utils/stream.js'
 import { logOTelEvent } from '../../utils/telemetry/events.js'
+import { toolFailureTracker } from './toolFailureTracker.js'
 import {
   addToolContentEvent,
   endToolBlockedOnUserSpan,
@@ -1180,9 +1181,10 @@ async function checkSafetyAndCallTool(
 
     // Map the tool result to API format once and cache it. This block is reused
     // by addToolResult (skipping the remap) and measured here for analytics.
-    const mappedToolResultBlock = tool.mapToolResultToToolResultBlockParam(
-      result.data,
-      toolUseID,
+    const mappedToolResultBlock = toolFailureTracker.observe(
+      tool.name,
+      processedInput,
+      tool.mapToolResultToToolResultBlockParam(result.data, toolUseID),
     )
     const mappedContent = mappedToolResultBlock.content
     const toolResultSizeBytes = !mappedContent

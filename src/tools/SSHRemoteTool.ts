@@ -143,6 +143,36 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
 }
 
+export function sanitizeSshStderr(stderr: string): string {
+  const lines = stderr.replaceAll('\r\n', '\n').split('\n')
+  const kept: string[] = []
+  let skippingWarning = false
+  for (const line of lines) {
+    if (
+      /CryptographyDeprecationWarning:.*(?:TripleDES|Blowfish)/i.test(line) ||
+      /TripleDES has been moved to cryptography\.hazmat\.decrepit/i.test(
+        line,
+      ) ||
+      /Blowfish has been deprecated/i.test(line)
+    ) {
+      skippingWarning = true
+      continue
+    }
+    if (
+      skippingWarning &&
+      /^\s*(?:warnings\.warn|from cryptography\.)/i.test(line)
+    ) {
+      continue
+    }
+    skippingWarning = false
+    kept.push(line)
+  }
+  return kept
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function parseSshHost(value: string): { host: string; port?: number } {
   const trimmed = value.trim()
   const commandMatch = trimmed.match(/^ssh\s+(?:-p\s+(\d+)\s+)?([^\s]+)$/i)
@@ -420,7 +450,7 @@ async function spawnSsh(
         proc.exited,
       ]).then(([stdout, stderr, exitCode]) => ({
         stdout,
-        stderr,
+        stderr: sanitizeSshStderr(stderr),
         exitCode,
       })),
       new Promise<never>((_, reject) => {
@@ -642,7 +672,7 @@ export const SSHRemoteTool = buildTool({
     return 'Save, reuse, inspect, and operate SSH connections with the local OpenSSH client.'
   },
   async prompt() {
-    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available.'
+    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available.'
   },
   renderToolUseMessage(input: Partial<Input>) {
     const target = input.name ?? input.host ?? ''
@@ -690,6 +720,7 @@ export const SSHRemoteTool = buildTool({
       tool_use_id: toolUseID,
       type: 'tool_result',
       content: parts.join('\n\n'),
+      is_error: data.exitCode !== 0,
     }
   },
 })

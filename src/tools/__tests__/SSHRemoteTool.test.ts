@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { getAllBaseTools } from '../../tools.js'
-import { SSHRemoteTool } from '../SSHRemoteTool.js'
+import { sanitizeSshStderr, SSHRemoteTool } from '../SSHRemoteTool.js'
 
 describe('SSHRemoteTool', () => {
   test('is registered in the Core model tool pool', () => {
@@ -137,5 +137,22 @@ describe('SSHRemoteTool', () => {
     expect(result.content).toContain('exit code: 0')
     expect(result.content).toContain('stdout:\nok')
     expect(result.content).toContain('stderr:\nwarning')
+    expect(result.is_error).toBe(false)
+    expect(
+      SSHRemoteTool.mapToolResultToToolResultBlockParam(
+        { stdout: '', stderr: 'failed', exitCode: 1 },
+        'tool-2',
+      ).is_error,
+    ).toBe(true)
+  })
+
+  test('removes known Paramiko deprecation noise but preserves real stderr', () => {
+    const stderr = [
+      '/usr/lib/python/site-packages/paramiko/transport.py: CryptographyDeprecationWarning: TripleDES has been moved to cryptography.hazmat.decrepit',
+      '  warnings.warn(',
+      '',
+      'fatal: repository not found',
+    ].join('\n')
+    expect(sanitizeSshStderr(stderr)).toBe('fatal: repository not found')
   })
 })

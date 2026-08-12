@@ -50,6 +50,7 @@ import {
   DEFAULT_SESSION_MEMORY_CONFIG,
   getSessionMemoryConfig,
   getToolCallsBetweenUpdates,
+  hasMetExtractionCooldown,
   hasMetInitializationThreshold,
   hasMetUpdateThreshold,
   isSessionMemoryInitialized,
@@ -156,20 +157,9 @@ export function shouldExtractMemory(messages: Message[]): boolean {
   const hasMetToolCallThreshold =
     toolCallsSinceLastUpdate >= getToolCallsBetweenUpdates()
 
-  // Check if the last assistant turn has no tool calls (safe to extract)
-  const hasToolCallsInLastTurn = hasToolCallsInLastAssistantTurn(messages)
-
-  // Trigger extraction when:
-  // 1. Both thresholds are met (tokens AND tool calls), OR
-  // 2. No tool calls in last turn AND token threshold is met
-  //    (to ensure we extract at natural conversation breaks)
-  //
-  // IMPORTANT: The token threshold (minimumTokensBetweenUpdate) is ALWAYS required.
-  // Even if the tool call threshold is met, extraction won't happen until the
-  // token threshold is also satisfied. This prevents excessive extractions.
   const shouldExtract =
-    (hasMetTokenThreshold && hasMetToolCallThreshold) ||
-    (hasMetTokenThreshold && !hasToolCallsInLastTurn)
+    hasMetExtractionCooldown() &&
+    (hasMetTokenThreshold || hasMetToolCallThreshold)
 
   if (shouldExtract) {
     const lastMessage = messages[messages.length - 1]
@@ -261,6 +251,11 @@ const initSessionMemoryConfigIfNeeded = memoize((): void => {
       remoteConfig.toolCallsBetweenUpdates > 0
         ? remoteConfig.toolCallsBetweenUpdates
         : DEFAULT_SESSION_MEMORY_CONFIG.toolCallsBetweenUpdates,
+    minimumMsBetweenUpdates:
+      remoteConfig.minimumMsBetweenUpdates &&
+      remoteConfig.minimumMsBetweenUpdates > 0
+        ? remoteConfig.minimumMsBetweenUpdates
+        : DEFAULT_SESSION_MEMORY_CONFIG.minimumMsBetweenUpdates,
   }
   setSessionMemoryConfig(config)
 })
@@ -307,56 +302,58 @@ const extractSessionMemory = sequential(async function (
 
   markExtractionStarted()
 
-  // Create isolated context for setup to avoid polluting parent's cache
-  const setupContext = createSubagentContext(toolUseContext)
+  try {
+    // Create isolated context for setup to avoid polluting parent's cache
+    const setupContext = createSubagentContext(toolUseContext)
 
-  // Set up file system and read current state with isolated context
-  const { memoryPath, currentMemory } =
-    await setupSessionMemoryFile(setupContext)
+    // Set up file system and read current state with isolated context
+    const { memoryPath, currentMemory } =
+      await setupSessionMemoryFile(setupContext)
 
-  // Create extraction message
-  const userPrompt = await buildSessionMemoryUpdatePrompt(
-    currentMemory,
-    memoryPath,
-    JSON.stringify(getRecordedTerminalMemories()),
-  )
+    // Create extraction message
+    const userPrompt = await buildSessionMemoryUpdatePrompt(
+      currentMemory,
+      memoryPath,
+      JSON.stringify(getRecordedTerminalMemories()),
+    )
 
-  // Run session memory extraction using runForkedAgent for prompt caching
-  // runForkedAgent creates an isolated context to prevent mutation of parent state
-  // Pass setupContext.readFileState so the forked agent can edit the memory file
-  await runForkedAgent({
-    promptMessages: [createUserMessage({ content: userPrompt })],
-    cacheSafeParams: createCacheSafeParams(context),
-    canUseTool: createMemoryFileCanUseTool(memoryPath),
-    querySource: 'session_memory',
-    forkLabel: 'session_memory',
-    overrides: { readFileState: setupContext.readFileState },
-    skipTranscript: true,
-  })
+    // Run session memory extraction using runForkedAgent for prompt caching
+    // runForkedAgent creates an isolated context to prevent mutation of parent state
+    // Pass setupContext.readFileState so the forked agent can edit the memory file
+    await runForkedAgent({
+      promptMessages: [createUserMessage({ content: userPrompt })],
+      cacheSafeParams: createCacheSafeParams(context),
+      canUseTool: createMemoryFileCanUseTool(memoryPath),
+      querySource: 'session_memory',
+      forkLabel: 'session_memory',
+      overrides: { readFileState: setupContext.readFileState },
+      skipTranscript: true,
+    })
 
-  // Log extraction event for tracking frequency
-  // Use the token usage from the last message in the conversation
-  const lastMessage = messages[messages.length - 1]
-  const usage = lastMessage ? getTokenUsage(lastMessage) : undefined
-  const config = getSessionMemoryConfig()
-  logEvent('tengu_session_memory_extraction', {
-    input_tokens: usage?.input_tokens,
-    output_tokens: usage?.output_tokens,
-    cache_read_input_tokens: usage?.cache_read_input_tokens ?? undefined,
-    cache_creation_input_tokens:
-      usage?.cache_creation_input_tokens ?? undefined,
-    config_min_message_tokens_to_init: config.minimumMessageTokensToInit,
-    config_min_tokens_between_update: config.minimumTokensBetweenUpdate,
-    config_tool_calls_between_updates: config.toolCallsBetweenUpdates,
-  })
+    // Log extraction event for tracking frequency
+    // Use the token usage from the last message in the conversation
+    const lastMessage = messages[messages.length - 1]
+    const usage = lastMessage ? getTokenUsage(lastMessage) : undefined
+    const config = getSessionMemoryConfig()
+    logEvent('tengu_session_memory_extraction', {
+      input_tokens: usage?.input_tokens,
+      output_tokens: usage?.output_tokens,
+      cache_read_input_tokens: usage?.cache_read_input_tokens ?? undefined,
+      cache_creation_input_tokens:
+        usage?.cache_creation_input_tokens ?? undefined,
+      config_min_message_tokens_to_init: config.minimumMessageTokensToInit,
+      config_min_tokens_between_update: config.minimumTokensBetweenUpdate,
+      config_tool_calls_between_updates: config.toolCallsBetweenUpdates,
+    })
 
-  // Record the context size at extraction for tracking minimumTokensBetweenUpdate
-  recordExtractionTokenCount(tokenCountWithEstimation(messages))
+    // Record the context size at extraction for tracking minimumTokensBetweenUpdate
+    recordExtractionTokenCount(tokenCountWithEstimation(messages))
 
-  // Update lastSummarizedMessageId after successful completion
-  updateLastSummarizedMessageIdIfSafe(messages)
-
-  markExtractionCompleted()
+    // Update lastSummarizedMessageId after successful completion
+    updateLastSummarizedMessageIdIfSafe(messages)
+  } finally {
+    markExtractionCompleted()
+  }
 })
 
 /**

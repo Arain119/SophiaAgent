@@ -26,13 +26,16 @@ export type SessionMemoryConfig = {
   minimumTokensBetweenUpdate: number
   /** Number of tool calls between session memory updates */
   toolCallsBetweenUpdates: number
+  /** Cooldown between automatic session memory updates */
+  minimumMsBetweenUpdates: number
 }
 
 // Default configuration values
 export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
   minimumMessageTokensToInit: 10000,
   minimumTokensBetweenUpdate: 5000,
-  toolCallsBetweenUpdates: 3,
+  toolCallsBetweenUpdates: 50,
+  minimumMsBetweenUpdates: 10 * 60 * 1000,
 }
 
 // Current session memory configuration
@@ -45,6 +48,7 @@ let lastSummarizedMessageId: string | undefined
 
 // Track extraction state with timestamp (set by sessionMemory.ts)
 let extractionStartedAt: number | undefined
+let lastExtractionCompletedAt: number | undefined
 
 // Track context size at last memory extraction (for minimumTokensBetweenUpdate)
 let tokensAtLastExtraction = 0
@@ -80,6 +84,15 @@ export function markExtractionStarted(): void {
  */
 export function markExtractionCompleted(): void {
   extractionStartedAt = undefined
+  lastExtractionCompletedAt = Date.now()
+}
+
+export function hasMetExtractionCooldown(now = Date.now()): boolean {
+  return (
+    lastExtractionCompletedAt === undefined ||
+    now - lastExtractionCompletedAt >=
+      sessionMemoryConfig.minimumMsBetweenUpdates
+  )
 }
 
 /**
@@ -204,4 +217,5 @@ export function resetSessionMemoryState(): void {
   sessionMemoryInitialized = false
   lastSummarizedMessageId = undefined
   extractionStartedAt = undefined
+  lastExtractionCompletedAt = undefined
 }
