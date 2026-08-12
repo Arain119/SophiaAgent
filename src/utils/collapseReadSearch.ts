@@ -145,25 +145,22 @@ function isMemoryWriteOrEdit(toolName: string, toolInput: unknown): boolean {
   return filePath !== undefined && isAutoManagedMemoryFile(filePath)
 }
 
-// ~5 lines × ~60 cols. Generous static cap — the renderer lets Ink wrap.
-const MAX_HINT_CHARS = 300
+const MAX_HINT_CHARS = 96
 
 /**
  * Format a bash command for the ⎿ hint. Drops blank lines, collapses runs of
  * inline whitespace, then caps total length. Newlines are preserved so the
  * renderer can indent continuation lines under ⎿.
  */
-function commandAsHint(command: string): string {
-  const cleaned =
-    '$ ' +
-    command
-      .split('\n')
-      .map(l => l.replace(/\s+/g, ' ').trim())
-      .filter(l => l !== '')
-      .join('\n')
+export function compactActivityHint(value: string): string {
+  const cleaned = value.replace(/\s+/g, ' ').trim()
   return cleaned.length > MAX_HINT_CHARS
-    ? cleaned.slice(0, MAX_HINT_CHARS - 1) + '…'
+    ? `${cleaned.slice(0, MAX_HINT_CHARS - 1)}…`
     : cleaned
+}
+
+function commandAsHint(command: string, description?: string): string {
+  return compactActivityHint(description || `$ ${command}`)
 }
 
 /**
@@ -891,13 +888,15 @@ export function collapseReadSearchGroups(
         // says "Ran N bash commands" instead of breaking the group.
         const count = countToolUses(msg)
         currentGroup.bashCount = (currentGroup.bashCount ?? 0) + count
-        const input = toolInfo.input as { command?: string } | undefined
+        const input = toolInfo.input as
+          | { command?: string; description?: string }
+          | undefined
         if (input?.command) {
           // Prefer the stripped `# comment` if present (it's what Claude wrote
           // for the human — same trigger as the comment-as-label tool-use render).
           currentGroup.latestDisplayHint =
             extractBashCommentLabel(input.command) ??
-            commandAsHint(input.command)
+            commandAsHint(input.command, input.description)
           // Remember tool_use_id → command so the result (arriving next) can
           // be scanned for commit SHA / PR URL.
           for (const id of getToolUseIdsFromMessage(msg)) {

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { RenderableMessage } from '../../types/message.js'
-import { collapseReadSearchGroups } from '../collapseReadSearch.js'
+import {
+  collapseReadSearchGroups,
+  compactActivityHint,
+} from '../collapseReadSearch.js'
 
 function toolUse(name: string, id: string, input: unknown): RenderableMessage {
   return {
@@ -58,5 +61,27 @@ describe('compact all tool activity', () => {
     expect(collapseReadSearchGroups([message], [bashTool] as never)).toEqual([
       message,
     ])
+  })
+
+  test('keeps the latest activity detail to one short line', () => {
+    const hint = compactActivityHint(`run tests\n${'x'.repeat(120)}`)
+    expect(hint).not.toContain('\n')
+    expect(hint.length).toBe(96)
+    expect(hint.endsWith('…')).toBe(true)
+  })
+
+  test('prefers a concise bash description over the raw command', () => {
+    const collapsed = collapseReadSearchGroups(
+      [
+        toolUse('Bash', 'bash-1', {
+          command: `bun test ${'very-long-path/'.repeat(20)}`,
+          description: 'Run focused tests',
+        }),
+      ],
+      [bashTool] as never,
+    )
+    expect(collapsed[0]?.type).toBe('collapsed_read_search')
+    if (collapsed[0]?.type !== 'collapsed_read_search') return
+    expect(collapsed[0].latestDisplayHint).toBe('Run focused tests')
   })
 })

@@ -21,9 +21,13 @@ import BashToolResultMessage from './BashToolResultMessage.js';
 import { extractBashCommentLabel } from './commentLabel.js';
 import { parseSedEditCommand } from './sedEditParser.js';
 
-// Constants for command display
-const MAX_COMMAND_DISPLAY_LINES = 2;
-const MAX_COMMAND_DISPLAY_CHARS = 160;
+// Default activity rows stay short; verbose mode retains the full command.
+const MAX_COMMAND_DISPLAY_CHARS = 96;
+
+export function compactCommandDisplay(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > MAX_COMMAND_DISPLAY_CHARS ? `${compact.slice(0, MAX_COMMAND_DISPLAY_CHARS - 1)}…` : compact;
+}
 
 // Simple component to show background hint and handle ctrl+b
 // When ctrl+b is pressed, backgrounds ALL running foreground commands
@@ -66,7 +70,7 @@ export function renderToolUseMessage(
   input: Partial<BashToolInput>,
   { verbose, theme: _theme }: { verbose: boolean; theme: ThemeName },
 ): React.ReactNode {
-  const { command } = input;
+  const { command, description } = input;
   if (!command) {
     return null;
   }
@@ -78,33 +82,13 @@ export function renderToolUseMessage(
   }
 
   if (!verbose) {
-    const lines = command.split('\n');
-
     if (isFullscreenEnvEnabled()) {
       const label = extractBashCommentLabel(command);
       if (label) {
-        return label.length > MAX_COMMAND_DISPLAY_CHARS ? label.slice(0, MAX_COMMAND_DISPLAY_CHARS) + '…' : label;
+        return compactCommandDisplay(label);
       }
     }
-
-    const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES;
-    const needsCharTruncation = command.length > MAX_COMMAND_DISPLAY_CHARS;
-
-    if (needsLineTruncation || needsCharTruncation) {
-      let truncated = command;
-
-      // First truncate by lines if needed
-      if (needsLineTruncation) {
-        truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n');
-      }
-
-      // Then truncate by chars if still too long
-      if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
-        truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS);
-      }
-
-      return <Text>{truncated.trim()}…</Text>;
-    }
+    return compactCommandDisplay(description || command);
   }
 
   return command;

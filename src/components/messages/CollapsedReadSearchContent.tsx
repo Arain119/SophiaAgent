@@ -7,7 +7,7 @@ import { findToolByName, type Tools } from '../../Tool.js';
 import { getReplPrimitiveTools } from '@sophia-agent/builtin-tools/tools/REPLTool/primitiveTools.js';
 import type { CollapsedReadSearchGroup, NormalizedAssistantMessage } from '../../types/message.js';
 import { uniq } from '../../utils/array.js';
-import { getToolUseIdsFromCollapsedGroup } from '../../utils/collapseReadSearch.js';
+import { compactActivityHint, getToolUseIdsFromCollapsedGroup } from '../../utils/collapseReadSearch.js';
 import { getDisplayPath } from '../../utils/file.js';
 import { formatDuration, formatSecondsShort } from '../../utils/format.js';
 import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
@@ -197,7 +197,10 @@ export function CollapsedReadSearchContent({
     }
   }
 
-  const displayedHint = useMinDisplayTime(incomingHint, MIN_HINT_DISPLAY_MS);
+  const displayedHint = useMinDisplayTime(
+    incomingHint === undefined ? undefined : compactActivityHint(incomingHint),
+    MIN_HINT_DISPLAY_MS,
+  );
 
   // Keep the newest activity expanded. As soon as assistant text follows,
   // isActiveGroup becomes false and the same messages collapse to one line.
@@ -531,20 +534,15 @@ export function CollapsedReadSearchContent({
         </Text>
       </Box>
       {isActiveGroup && displayedHint !== undefined && (
-        // Row layout: 5-wide gutter for ⎿, then a flex column for the text.
-        // Ink's wrap stays inside the right column so continuation lines
-        // indent under ⎿. MAX_HINT_CHARS in commandAsHint caps total at ~5 lines.
         <Box flexDirection="row">
           <Box width={5} flexShrink={0}>
             <Text dimColor>{'  ⎿  '}</Text>
           </Box>
           <Box flexDirection="column" flexGrow={1}>
-            {displayedHint.split('\n').map((line, i, arr) => (
-              <Text key={`hint-${i}`} dimColor>
-                {line}
-                {i === arr.length - 1 && shellProgressSuffix}
-              </Text>
-            ))}
+            <Text dimColor wrap="truncate-end">
+              {displayedHint}
+              {shellProgressSuffix}
+            </Text>
           </Box>
         </Box>
       )}
