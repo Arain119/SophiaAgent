@@ -28,7 +28,9 @@ mock.module('src/utils/sdkEventQueue.js', () => ({
   enqueueSdkEvent: () => {},
 }))
 
+const realDiskOutput = await import('src/utils/task/diskOutput.js')
 mock.module('src/utils/task/diskOutput.js', () => ({
+  ...realDiskOutput,
   getTaskOutputDelta: async () => null,
   getTaskOutputPath: (id: string) => `/tmp/${id}`,
   evictTaskOutput: () => {},
