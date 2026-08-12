@@ -14,8 +14,11 @@ const all = Array.from(
     cwd: root,
     onlyFiles: true,
   }),
-).map(path => path.replaceAll('\\', '/'))
-  .filter(path => !path.startsWith('node_modules/') && !path.startsWith('dist/'))
+)
+  .map(path => path.replaceAll('\\', '/'))
+  .filter(
+    path => !path.startsWith('node_modules/') && !path.startsWith('dist/'),
+  )
 const isolatedSet = new Set(isolated)
 const remaining = all.filter(path => !isolatedSet.has(path))
 

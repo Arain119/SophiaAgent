@@ -385,7 +385,8 @@ export function getMemoryPressureSnapshot(): MemoryPressureSnapshot {
  * Existing work remains under the pressure controller; this only gates new work.
  */
 export function waitForAgentAdmission(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(new Error('Agent admission aborted'))
+  if (signal.aborted)
+    return Promise.reject(new Error('Agent admission aborted'))
   if (!shouldDeferAgentAdmission(snapshot.level)) return Promise.resolve()
   return new Promise((resolve, reject) => {
     let unsubscribe: (() => void) | undefined
