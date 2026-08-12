@@ -13,6 +13,7 @@ import { z } from 'zod/v4'
 import type { ToolResultBlockParam } from '../Tool.js'
 import { buildTool } from '../Tool.js'
 import { lazySchema } from '../utils/lazySchema.js'
+import { compactCommandDisplay } from '../utils/compactCommandDisplay.js'
 import {
   getSshPassword,
   removeSshPassword,
@@ -718,7 +719,7 @@ export const SSHRemoteTool = buildTool({
   },
   renderToolUseMessage(input: Partial<Input>) {
     const target = input.name ?? input.host ?? ''
-    return `SSH ${input.action ?? ''} ${target}${input.command ? `: ${input.command}` : ''}`.trim()
+    return `SSH ${input.action ?? ''} ${target}${input.command ? `: ${compactCommandDisplay(input.command)}` : ''}`.trim()
   },
   async call(input: Input) {
     try {

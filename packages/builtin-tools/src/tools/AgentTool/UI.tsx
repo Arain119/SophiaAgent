@@ -578,7 +578,7 @@ export function renderToolUseProgressMessage(
                 addMargin={false}
                 tools={tools}
                 commands={[]}
-                verbose={verbose}
+                verbose={false}
                 inProgressToolUseIDs={collapsedInProgressIDs}
                 progressMessagesForMessage={[]}
                 shouldAnimate={false}

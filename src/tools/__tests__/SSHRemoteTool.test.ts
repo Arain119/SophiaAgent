@@ -60,6 +60,16 @@ describe('SSHRemoteTool', () => {
     ).toBe(true)
   })
 
+  test('keeps inline remote command activity concise', () => {
+    expect(
+      SSHRemoteTool.renderToolUseMessage({
+        action: 'execute',
+        host: 'root@example.com',
+        command: "python - <<'PY'\nprint('detail')\nPY",
+      }),
+    ).toBe('SSH execute root@example.com: python (inline script)')
+  })
+
   test('rejects unknown fields and invalid timeouts', () => {
     expect(
       SSHRemoteTool.inputSchema.safeParse({

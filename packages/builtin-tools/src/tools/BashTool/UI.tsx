@@ -15,19 +15,14 @@ import { env } from 'src/utils/env.js';
 import { isEnvTruthy } from 'src/utils/envUtils.js';
 import { getDisplayPath } from 'src/utils/file.js';
 import { isFullscreenEnvEnabled } from 'src/utils/fullscreen.js';
+import { compactCommandDisplay } from 'src/utils/compactCommandDisplay.js';
 import type { ThemeName } from 'src/utils/theme.js';
 import type { BashProgress, BashToolInput, Out } from './BashTool.js';
 import BashToolResultMessage from './BashToolResultMessage.js';
 import { extractBashCommentLabel } from './commentLabel.js';
 import { parseSedEditCommand } from './sedEditParser.js';
 
-// Default activity rows stay short; verbose mode retains the full command.
-const MAX_COMMAND_DISPLAY_CHARS = 96;
-
-export function compactCommandDisplay(value: string): string {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  return compact.length > MAX_COMMAND_DISPLAY_CHARS ? `${compact.slice(0, MAX_COMMAND_DISPLAY_CHARS - 1)}…` : compact;
-}
+export { compactCommandDisplay } from 'src/utils/compactCommandDisplay.js';
 
 // Simple component to show background hint and handle ctrl+b
 // When ctrl+b is pressed, backgrounds ALL running foreground commands

@@ -161,8 +161,29 @@ describe('createExecutionSnapshot', () => {
       ],
     }
     expect(formatExecutionStatus(snapshot)).toBe(
-      'running · Running isolated tests · 1h1m · 2 active',
+      'Running isolated tests · 1h1m · 2 active',
     )
     expect(formatExecutionStatus(snapshot, 40)?.length).toBeLessThanOrEqual(40)
+  })
+
+  test('keeps a meaningful workflow phase in the real-time status line', () => {
+    const snapshot: ExecutionSnapshot = {
+      type: 'execution_snapshot',
+      activeCount: 1,
+      omittedCount: 0,
+      tasks: [
+        {
+          id: 'workflow-1',
+          type: 'local_workflow',
+          status: 'running',
+          description: 'Release workflow',
+          outputFile: '/tmp/workflow-1',
+          workflowPhase: 'verify',
+          activity: 'Running tests',
+          elapsedMs: 65_000,
+        },
+      ],
+    }
+    expect(formatExecutionStatus(snapshot)).toBe('verify · Running tests · 1m')
   })
 })

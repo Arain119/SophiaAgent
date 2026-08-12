@@ -46,7 +46,7 @@ import {
   PREVIEW_SIZE_BYTES,
 } from 'src/utils/toolResultStorage.js';
 import { shouldUseSandbox } from '../BashTool/shouldUseSandbox.js';
-import { BackgroundHint } from '../BashTool/UI.js';
+import { BackgroundHint, compactCommandDisplay } from '../BashTool/UI.js';
 import {
   buildImageToolResult,
   isImageOutput,
@@ -384,14 +384,14 @@ export const PowerShellTool = buildTool({
     if (description) {
       return description;
     }
-    return truncate(command, TOOL_SUMMARY_MAX_LENGTH);
+    return truncate(compactCommandDisplay(command), TOOL_SUMMARY_MAX_LENGTH);
   },
 
   getActivityDescription(input: Partial<PowerShellToolInput> | undefined): string {
     if (!input?.command) {
       return 'Running command';
     }
-    const desc = input.description ?? truncate(input.command, TOOL_SUMMARY_MAX_LENGTH);
+    const desc = input.description ?? truncate(compactCommandDisplay(input.command), TOOL_SUMMARY_MAX_LENGTH);
     return `Running ${desc}`;
   },
 

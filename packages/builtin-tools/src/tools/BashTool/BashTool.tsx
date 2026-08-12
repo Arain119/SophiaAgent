@@ -66,6 +66,7 @@ import { shouldUseSandbox } from './shouldUseSandbox.js';
 import { BASH_TOOL_NAME } from './toolName.js';
 import {
   BackgroundHint,
+  compactCommandDisplay,
   renderToolResultMessage,
   renderToolUseErrorMessage,
   renderToolUseMessage,
@@ -613,13 +614,13 @@ export const BashTool = buildTool({
     if (description) {
       return description;
     }
-    return truncate(command, TOOL_SUMMARY_MAX_LENGTH);
+    return truncate(compactCommandDisplay(command), TOOL_SUMMARY_MAX_LENGTH);
   },
   getActivityDescription(input) {
     if (!input?.command) {
       return 'Running command';
     }
-    const desc = input.description ?? truncate(input.command, TOOL_SUMMARY_MAX_LENGTH);
+    const desc = input.description ?? truncate(compactCommandDisplay(input.command), TOOL_SUMMARY_MAX_LENGTH);
     return `Running ${desc}`;
   },
   async validateInput(input: BashToolInput): Promise<ValidationResult> {

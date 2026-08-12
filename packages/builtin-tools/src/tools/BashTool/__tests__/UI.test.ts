@@ -14,11 +14,18 @@ describe('BashTool compact activity UI', () => {
     ).toBe('Check repository status')
   })
 
-  test('collapses multiline commands to one bounded line', () => {
-    const output = compactCommandDisplay(`first line\n${'x'.repeat(120)}`)
-    expect(output).not.toContain('\n')
-    expect(output.length).toBe(96)
-    expect(output.endsWith('…')).toBe(true)
+  test('summarizes multiline commands instead of showing their body', () => {
+    expect(compactCommandDisplay(`first line\n${'x'.repeat(120)}`)).toBe(
+      'first (inline script)',
+    )
+  })
+
+  test('summarizes a heredoc by executable instead of showing its body', () => {
+    expect(
+      compactCommandDisplay(
+        "D:/anaconda3/python.exe - <<'PY'\nprint('detail')\nPY",
+      ),
+    ).toBe('python.exe (inline script)')
   })
 
   test('preserves the full command in verbose mode', () => {

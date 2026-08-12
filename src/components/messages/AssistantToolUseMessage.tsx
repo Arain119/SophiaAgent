@@ -109,7 +109,11 @@ export function AssistantToolUseMessage({
   }
 
   const renderedToolUseMessage = input.success
-    ? renderToolUseMessage(tool, input.data, { theme, verbose, commands })
+    ? renderToolUseMessage(tool, input.data, {
+        theme,
+        verbose: verbose && isResolved,
+        commands,
+      })
     : null;
   if (renderedToolUseMessage === null) {
     return null;

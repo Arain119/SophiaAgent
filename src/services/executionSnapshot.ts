@@ -61,15 +61,16 @@ export function formatExecutionStatus(
   const task = snapshot.tasks.reduce((selected, candidate) =>
     candidate.elapsedMs > selected.elapsedMs ? candidate : selected,
   )
-  const phase = task.workflowPhase ?? task.status
+  const phase = task.workflowPhase
   const activity = task.activity ?? task.summary ?? task.description
   const count =
     snapshot.activeCount > 1 ? ` · ${snapshot.activeCount} active` : ''
-  const full = `${phase} · ${activity} · ${formatElapsed(task.elapsedMs)}${count}`
+  const prefix = phase ? `${phase} · ` : ''
+  const full = `${prefix}${activity} · ${formatElapsed(task.elapsedMs)}${count}`
   if (full.length <= maxLength) return full
-  const fixed = `${phase} ·  · ${formatElapsed(task.elapsedMs)}${count}`
+  const fixed = `${prefix} · ${formatElapsed(task.elapsedMs)}${count}`
   const available = Math.max(8, maxLength - fixed.length)
-  return `${phase} · ${activity.slice(0, available - 3)}... · ${formatElapsed(task.elapsedMs)}${count}`
+  return `${prefix}${activity.slice(0, available - 3)}... · ${formatElapsed(task.elapsedMs)}${count}`
 }
 
 function compactText(value: string | undefined): string | undefined {
