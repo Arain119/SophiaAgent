@@ -7,7 +7,9 @@ import { logMock } from '../../../../tests/mocks/log.js'
 mock.module('src/utils/debug.ts', debugMock)
 mock.module('src/utils/log.ts', logMock)
 
+const realXmlConstants = await import('src/constants/xml.js')
 mock.module('src/constants/xml.js', () => ({
+  ...realXmlConstants,
   TASK_NOTIFICATION_TAG: 'task_notification',
   TASK_ID_TAG: 'task_id',
   TOOL_USE_ID_TAG: 'tool_use_id',

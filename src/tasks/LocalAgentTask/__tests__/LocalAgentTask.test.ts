@@ -71,7 +71,9 @@ mock.module('src/utils/sdkEventQueue.js', () => ({
   enqueueSdkEvent: noop,
 }))
 
+const realXmlConstants = await import('src/constants/xml.js')
 mock.module('src/constants/xml.js', () => ({
+  ...realXmlConstants,
   TASK_NOTIFICATION_TAG: 'task_notification',
   TASK_ID_TAG: 'task_id',
   TOOL_USE_ID_TAG: 'tool_use_id',
