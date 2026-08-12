@@ -449,6 +449,7 @@ function isRetryableErrorMessage(message: string): boolean {
     normalized.includes('connection reset') ||
     normalized.includes('connection was closed') ||
     normalized.includes('econnreset') ||
+    normalized.includes('stream_read_error') ||
     normalized.includes('fetch failed')
   )
 }

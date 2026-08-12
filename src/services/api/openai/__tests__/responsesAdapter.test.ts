@@ -342,6 +342,43 @@ describe('createResponsesStream', () => {
     expect(events.at(-1)?.type).toBe('response.completed')
   })
 
+  test('retries stream_read_error before semantic output', async () => {
+    let attempts = 0
+    const fetchOverride = (async () => {
+      attempts += 1
+      if (attempts === 1) {
+        return sseResponse(
+          [
+            {
+              type: 'response.error',
+              error: {
+                code: 'stream_read_error',
+                message: 'stream_read_error',
+              },
+            },
+          ],
+          { 'Retry-After': '0' },
+        )
+      }
+      return sseResponse([
+        {
+          type: 'response.completed',
+          response: { status: 'completed', usage: {} },
+        },
+      ])
+    }) as unknown as typeof fetch
+
+    const stream = await createResponsesStream({
+      request: responsesRequest,
+      signal: new AbortController().signal,
+      fetchOverride,
+    })
+    const events = await collectStream(stream)
+
+    expect(attempts).toBe(2)
+    expect(events.at(-1)?.type).toBe('response.completed')
+  })
+
   test('switches providers when a stream fails before semantic output', async () => {
     let primaryAttempts = 0
     const fetchOverride = (async (input: RequestInfo | URL) => {
@@ -401,6 +438,29 @@ describe('createResponsesStream', () => {
     await expect(collectStream(stream)).rejects.toThrow(
       'Upstream request failed',
     )
+    expect(attempts).toBe(1)
+  })
+
+  test('does not replay stream_read_error after semantic output', async () => {
+    let attempts = 0
+    const fetchOverride = (async () => {
+      attempts += 1
+      return sseResponse([
+        { type: 'response.output_text.delta', delta: 'partial' },
+        {
+          type: 'response.error',
+          error: { code: 'stream_read_error', message: 'stream_read_error' },
+        },
+      ])
+    }) as unknown as typeof fetch
+
+    const stream = await createResponsesStream({
+      request: responsesRequest,
+      signal: new AbortController().signal,
+      fetchOverride,
+    })
+
+    await expect(collectStream(stream)).rejects.toThrow('stream_read_error')
     expect(attempts).toBe(1)
   })
 
