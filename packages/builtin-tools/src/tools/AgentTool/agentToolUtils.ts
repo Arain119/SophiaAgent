@@ -66,6 +66,16 @@ import { getTokenCountFromUsage } from 'src/utils/tokens.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
+import {
+  countToolUses,
+  getLastToolUseName,
+  getTerminalAgentError,
+} from './agentMessageUtils.js'
+export {
+  countToolUses,
+  getLastToolUseName,
+  getTerminalAgentError,
+} from './agentMessageUtils.js'
 export type ResolvedAgentTools = {
   hasWildcard: boolean
   validTools: string[]
@@ -250,21 +260,6 @@ export const agentToolResultSchema = lazySchema(() =>
 
 export type AgentToolResult = z.input<ReturnType<typeof agentToolResultSchema>>
 
-export function countToolUses(messages: MessageType[]): number {
-  let count = 0
-  for (const m of messages) {
-    if (m.type === 'assistant') {
-      const content = m.message?.content as ContentItem[] | undefined
-      for (const block of content ?? []) {
-        if (block.type === 'tool_use') {
-          count++
-        }
-      }
-    }
-  }
-  return count
-}
-
 export function finalizeAgentTool(
   agentMessages: MessageType[],
   agentId: string,
@@ -363,35 +358,6 @@ export function finalizeAgentTool(
     totalToolUseCount,
     usage: lastAssistantMessage.message?.usage as AgentToolResult['usage'],
   }
-}
-
-export function getTerminalAgentError(
-  messages: MessageType[],
-): string | undefined {
-  const lastAssistant = getLastAssistantMessage(messages)
-  if (!lastAssistant?.isApiErrorMessage) return undefined
-  const content = extractTextContent(
-    (lastAssistant.message?.content as ContentItem[]) ?? [],
-    '\n',
-  ).trim()
-  return (
-    content ||
-    (typeof lastAssistant.errorDetails === 'string'
-      ? lastAssistant.errorDetails
-      : 'Subagent API request failed')
-  )
-}
-
-/**
- * Returns the name of the last tool_use block in an assistant message,
- * or undefined if the message is not an assistant message with tool_use.
- */
-export function getLastToolUseName(message: MessageType): string | undefined {
-  if (message.type !== 'assistant') return undefined
-  const block = ((message.message?.content as ContentItem[]) ?? []).findLast(
-    b => b.type === 'tool_use',
-  )
-  return block?.type === 'tool_use' ? block.name : undefined
 }
 
 export function emitTaskProgress(

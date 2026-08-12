@@ -1,4 +1,4 @@
-import { mock, describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import { debugMock } from '../../../../../../tests/mocks/debug'
 
 // ─── Mocks for agentToolUtils.ts dependencies ───
@@ -37,45 +37,6 @@ mock.module('src/services/api/dumpPrompts.js', () => ({
 mock.module('src/Tool.js', () => ({
   toolMatchesName: () => false,
   findToolByName: noop,
-}))
-
-// messages.ts is complex - provide stubs for all named exports
-mock.module('src/utils/messages.ts', () => ({
-  extractTextContent: (content: any[]) =>
-    content
-      ?.filter?.((b: any) => b.type === 'text')
-      ?.map?.((b: any) => b.text)
-      ?.join('') ?? '',
-  getLastAssistantMessage: (messages: any[]) =>
-    messages.findLast(message => message.type === 'assistant'),
-  SYNTHETIC_MESSAGES: new Set(),
-  INTERRUPT_MESSAGE: '',
-  INTERRUPT_MESSAGE_FOR_TOOL_USE: '',
-  CANCEL_MESSAGE: '',
-  REJECT_MESSAGE: '',
-  REJECT_MESSAGE_WITH_REASON_PREFIX: '',
-  SUBAGENT_REJECT_MESSAGE: '',
-  SUBAGENT_REJECT_MESSAGE_WITH_REASON_PREFIX: '',
-  PLAN_REJECTION_PREFIX: '',
-  DENIAL_WORKAROUND_GUIDANCE: '',
-  NO_RESPONSE_REQUESTED: '',
-  SYNTHETIC_TOOL_RESULT_PLACEHOLDER: '',
-  SYNTHETIC_MODEL: '',
-  AUTO_REJECT_MESSAGE: noop,
-  DONT_ASK_REJECT_MESSAGE: noop,
-  withMemoryCorrectionHint: (s: string) => s,
-  deriveShortMessageId: () => '',
-  isClassifierDenial: () => false,
-  buildYoloRejectionMessage: () => '',
-  buildClassifierUnavailableMessage: () => '',
-  isEmptyMessageText: () => true,
-  createAssistantMessage: noop,
-  createAssistantAPIErrorMessage: noop,
-  createUserMessage: noop,
-  prepareUserContent: noop,
-  createUserInterruptionMessage: noop,
-  createSyntheticUserCaveatMessage: noop,
-  formatCommandInputTags: noop,
 }))
 
 mock.module('src/tasks/LocalAgentTask/LocalAgentTask.js', () => ({
@@ -155,7 +116,7 @@ mock.module('src/tools/AgentTool/AgentTool.tsx', () => ({
 }))
 
 const { countToolUses, getLastToolUseName, getTerminalAgentError } =
-  await import('../agentToolUtils')
+  await import('../agentMessageUtils')
 
 function makeAssistantMessage(content: any[]): any {
   return { type: 'assistant', message: { content } }

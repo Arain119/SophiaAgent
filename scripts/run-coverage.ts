@@ -84,9 +84,15 @@ for (const [index, files] of batches.entries()) {
   if (exitCode !== 0 && !isOnlyWindowsReporterFailure) {
     process.stdout.write(stdout)
     process.stderr.write(stderr)
+    console.error(
+      `::error title=Coverage batch failed::${files.join(', ')} exited with code ${exitCode}`,
+    )
     process.exit(exitCode)
   }
   if (!info?.isFile() || info.size === 0) {
+    console.error(
+      `::error title=Coverage report missing::${files.join(', ')} did not produce lcov.info`,
+    )
     throw new Error(`Coverage batch ${index + 1} did not produce lcov.info`)
   }
   reports.push(await Bun.file(partPath).text())
