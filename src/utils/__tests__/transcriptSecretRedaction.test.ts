@@ -37,6 +37,25 @@ describe('transcript secret redaction', () => {
     expect(getSshPassword('root@example.com', 17034, storage)).toBeUndefined()
   })
 
+  test('does not overwrite secure storage after a read failure', () => {
+    let updates = 0
+    const storage = {
+      read: () => null,
+      update: () => {
+        updates += 1
+        return { success: true }
+      },
+    }
+
+    expect(
+      setSshPassword('root@example.com', 22, 'new-password', storage),
+    ).toBeInstanceOf(Error)
+    expect(removeSshPassword('root@example.com', 22, storage)).toBeInstanceOf(
+      Error,
+    )
+    expect(updates).toBe(0)
+  })
+
   test('redacts password labels and common API token formats', () => {
     const text = redactSecretText(
       'password: secret-value npm_1234567890abcdefghijkl sk-1234567890abcdefghijkl',

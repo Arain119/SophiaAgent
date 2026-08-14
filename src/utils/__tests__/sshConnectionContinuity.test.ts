@@ -40,4 +40,28 @@ describe('SSH connection continuity', () => {
     expect(context).toContain('"port":22')
     expect(context).toContain('"hasStoredCredential":false')
   })
+
+  test('exposes connection metadata without credential material', () => {
+    const context = formatSshCompactContext(
+      {
+        sessionId: 'session-1',
+        host: 'root@example.com',
+        port: 38100,
+        targetUrl: 'ssh://root@example.com:38100',
+        username: 'root',
+        identityFile: '~/.ssh/id_ed25519',
+        authMethod: 'identity_file',
+        credentialSource: 'session',
+        credentialAvailable: true,
+        updatedAt: 1,
+      },
+      false,
+    )
+    expect(context).toContain('"targetUrl":"ssh://root@example.com:38100"')
+    expect(context).toContain('"username":"root"')
+    expect(context).toContain('"authMethod":"identity_file"')
+    expect(context).toContain('"credentialSource":"session"')
+    expect(context).not.toContain('secret-value')
+    expect(context).not.toContain('BEGIN OPENSSH PRIVATE KEY')
+  })
 })

@@ -52,4 +52,44 @@ describe('provider credential access', () => {
     stored = {}
     expect(access.get('primary')).toBeUndefined()
   })
+
+  test('merges updates into the last snapshot after a transient read failure', () => {
+    let stored: Record<string, unknown> | null = {
+      providerApiKeys: { primary: 'primary-key' },
+      sshPasswords: { host: 'ssh-password' },
+    }
+    let updated: Record<string, unknown> | undefined
+    const access = createProviderCredentialAccess({
+      read: () => stored,
+      update(data) {
+        updated = data
+        return { success: true }
+      },
+    })
+
+    expect(access.get('primary')).toBe('primary-key')
+    stored = null
+    expect(access.update({ secondary: 'secondary-key' })).toBeNull()
+    expect(updated).toEqual({
+      providerApiKeys: {
+        primary: 'primary-key',
+        secondary: 'secondary-key',
+      },
+      sshPasswords: { host: 'ssh-password' },
+    })
+  })
+
+  test('refuses to overwrite storage when no readable snapshot exists', () => {
+    let updates = 0
+    const access = createProviderCredentialAccess({
+      read: () => null,
+      update() {
+        updates += 1
+        return { success: true }
+      },
+    })
+
+    expect(access.update({ primary: 'new-key' })).toBeInstanceOf(Error)
+    expect(updates).toBe(0)
+  })
 })

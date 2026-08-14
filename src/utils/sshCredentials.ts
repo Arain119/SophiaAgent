@@ -25,7 +25,12 @@ export function setSshPassword(
   password: string,
   storage: CredentialStorage = getSecureStorage(),
 ): Error | null {
-  const existing = storage.read() ?? {}
+  const existing = storage.read()
+  if (existing === null) {
+    return new Error(
+      'Failed to read existing credentials; refusing to overwrite secure storage',
+    )
+  }
   const result = storage.update({
     ...existing,
     sshPasswords: {
@@ -41,7 +46,12 @@ export function removeSshPassword(
   port = 22,
   storage: CredentialStorage = getSecureStorage(),
 ): Error | null {
-  const existing = storage.read() ?? {}
+  const existing = storage.read()
+  if (existing === null) {
+    return new Error(
+      'Failed to read existing credentials; refusing to overwrite secure storage',
+    )
+  }
   const sshPasswords = { ...(existing.sshPasswords ?? {}) }
   delete sshPasswords[sshCredentialKey(host, port)]
   const result = storage.update({

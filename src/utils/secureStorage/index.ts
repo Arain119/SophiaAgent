@@ -1,4 +1,7 @@
 import { createFallbackStorage } from './fallbackStorage.js'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { getSophiaConfigHomeDir } from '../envUtils.js'
 import { macOsKeychainStorage } from './macOsKeychainStorage.js'
 import { plainTextStorage } from './plainTextStorage.js'
 import type { SecureStorage, SecureStorageData } from './types.js'
@@ -20,7 +23,13 @@ export function getSecureStorage(): SecureStorage {
         const encrypted = windowsDpapiStorage.read()
         if (encrypted !== null) return encrypted
         const legacy = plainTextStorage.read()
-        if (legacy === null) return null
+        if (legacy === null) {
+          const configDir = getSophiaConfigHomeDir()
+          const storageExists =
+            existsSync(join(configDir, '.credentials.dpapi')) ||
+            existsSync(join(configDir, '.credentials.json'))
+          return storageExists ? null : {}
+        }
         if (windowsDpapiStorage.update(legacy).success) {
           plainTextStorage.delete()
           return legacy

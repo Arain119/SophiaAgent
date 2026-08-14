@@ -17,6 +17,11 @@ export type SshConnectionContinuity = {
   host: string
   port: number
   identityFile?: string
+  targetUrl?: string
+  username?: string
+  authMethod?: 'password' | 'identity_file' | 'ssh_agent' | 'default'
+  credentialSource?: 'input' | 'session' | 'persistent' | 'none'
+  credentialAvailable?: boolean
   cwd?: string
   state?: 'disconnected' | 'connecting' | 'ready' | 'degraded' | 'blocked'
   lastSuccessAt?: number
@@ -98,6 +103,21 @@ export async function readSshConnectionContinuity(): Promise<SshConnectionContin
       ...(typeof item.identityFile === 'string' && {
         identityFile: item.identityFile,
       }),
+      ...(typeof item.targetUrl === 'string' && { targetUrl: item.targetUrl }),
+      ...(typeof item.username === 'string' && { username: item.username }),
+      ...((item.authMethod === 'password' ||
+        item.authMethod === 'identity_file' ||
+        item.authMethod === 'ssh_agent' ||
+        item.authMethod === 'default') && { authMethod: item.authMethod }),
+      ...((item.credentialSource === 'input' ||
+        item.credentialSource === 'session' ||
+        item.credentialSource === 'persistent' ||
+        item.credentialSource === 'none') && {
+        credentialSource: item.credentialSource,
+      }),
+      ...(typeof item.credentialAvailable === 'boolean' && {
+        credentialAvailable: item.credentialAvailable,
+      }),
       ...(typeof item.cwd === 'string' && { cwd: item.cwd }),
       ...((item.state === 'disconnected' ||
         item.state === 'connecting' ||
@@ -128,6 +148,14 @@ export function formatSshCompactContext(
     host: connection.host,
     port: connection.port,
     ...(connection.identityFile && { identityFile: connection.identityFile }),
+    ...(connection.targetUrl && { targetUrl: connection.targetUrl }),
+    ...(connection.username && { username: connection.username }),
+    ...(connection.authMethod && { authMethod: connection.authMethod }),
+    ...(connection.credentialSource && {
+      credentialSource: connection.credentialSource,
+    }),
+    credentialAvailable: connection.credentialAvailable ?? hasStoredCredential,
+    hasStoredCredential,
     ...(connection.cwd && { cwd: connection.cwd }),
     ...(connection.state && { state: connection.state }),
     ...(connection.lastSuccessAt && {
@@ -136,15 +164,17 @@ export function formatSshCompactContext(
     ...(connection.lastFailureAt && {
       lastFailureAt: new Date(connection.lastFailureAt).toISOString(),
     }),
-    hasStoredCredential,
   }
   const cwdInstruction = connection.cwd
     ? ` Preserve the remote working directory by passing cwd: ${JSON.stringify(connection.cwd)} unless the user explicitly changes it.`
     : ''
+  const credentialInstruction = metadata.credentialAvailable
+    ? 'A credential is available to the host process; do not request or expose its secret.'
+    : 'No credential is currently available; request one from the user only when the SSH operation needs it.'
   return `<ssh_connection_context>
-The most recently used SSH target is available after compaction.
+The most recently used SSH target is available after compaction. The metadata below is visible to the model but contains no password or private-key material.
 Connection metadata: ${JSON.stringify(metadata)}
-For the next SSH operation, call SSHRemote directly with ${JSON.stringify(target)} plus the requested action and command.${cwdInstruction} Do not call list or save first, and do not ask the user for the password when hasStoredCredential is true. The credential is resolved only by the host process and must never be included in tool input or output.
+For the next SSH operation, call SSHRemote directly with ${JSON.stringify(target)} plus the requested action and command.${cwdInstruction} Do not call list or save first. ${credentialInstruction} Credentials are resolved only by the host process and must never be included in tool input or output.
 </ssh_connection_context>`
 }
 

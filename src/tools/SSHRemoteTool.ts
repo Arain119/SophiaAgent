@@ -131,6 +131,7 @@ type Connection = {
   port?: number
   identityFile?: string
   password?: string
+  credentialSource?: 'input' | 'session' | 'persistent' | 'none'
 }
 type ConnectionLifecycleState = {
   state: 'disconnected' | 'connecting' | 'ready' | 'degraded' | 'blocked'
@@ -215,6 +216,17 @@ function parseSshHost(value: string): { host: string; port?: number } {
   return { host: trimmed }
 }
 
+function sshUsername(host: string): string | undefined {
+  const at = host.lastIndexOf('@')
+  return at > 0 ? host.slice(0, at) : undefined
+}
+
+function sshTargetUrl(host: string, port: number): string {
+  const username = sshUsername(host)
+  const hostname = username ? host.slice(host.lastIndexOf('@') + 1) : host
+  return `ssh://${username ? `${encodeURIComponent(username)}@` : ''}${hostname}:${port}`
+}
+
 async function readConnections(): Promise<Record<string, Connection>> {
   try {
     const parsed: unknown = JSON.parse(await readFile(CONNECTIONS_FILE, 'utf8'))
@@ -268,21 +280,39 @@ async function resolveConnection(input: Input): Promise<Connection> {
   const parsedHost = parseSshHost(rawHost)
   const host = parsedHost.host
   const port = input.port ?? parsedHost.port ?? saved?.port
+  const inputPassword = input.password
+  const sessionPassword = sessionPasswords.get(passwordKey({ host, port }))
+  const persistedPassword = getSshPassword(host, port ?? 22)
   const connection: Connection = {
     ...(input.name && { name: input.name }),
     host,
     port,
     identityFile: input.identityFile ?? saved?.identityFile,
-    password:
-      input.password ??
-      sessionPasswords.get(passwordKey({ host, port })) ??
-      getSshPassword(host, port ?? 22),
+    password: inputPassword ?? sessionPassword ?? persistedPassword,
+    credentialSource: inputPassword
+      ? 'input'
+      : sessionPassword
+        ? 'session'
+        : persistedPassword
+          ? 'persistent'
+          : 'none',
   }
   await recordSshConnectionContinuity({
     ...(input.name && { name: input.name }),
     host,
     port: port ?? 22,
     ...(connection.identityFile && { identityFile: connection.identityFile }),
+    targetUrl: sshTargetUrl(host, port ?? 22),
+    ...(sshUsername(host) && { username: sshUsername(host) }),
+    authMethod: connection.password
+      ? 'password'
+      : connection.identityFile
+        ? 'identity_file'
+        : 'default',
+    credentialSource: connection.credentialSource,
+    credentialAvailable: Boolean(
+      connection.password || connection.identityFile,
+    ),
   })
   return connection
 }
@@ -367,6 +397,19 @@ async function persistConnectionContinuity(
     host: connection.host,
     port: connection.port ?? 22,
     ...(connection.identityFile && { identityFile: connection.identityFile }),
+    targetUrl: sshTargetUrl(connection.host, connection.port ?? 22),
+    ...(sshUsername(connection.host) && {
+      username: sshUsername(connection.host),
+    }),
+    authMethod: connection.password
+      ? 'password'
+      : connection.identityFile
+        ? 'identity_file'
+        : 'default',
+    credentialSource: connection.credentialSource ?? 'none',
+    credentialAvailable: Boolean(
+      connection.password || connection.identityFile,
+    ),
     ...(cwd && { cwd }),
     state,
     ...(lifecycle?.lastSuccessAt && {
@@ -715,6 +758,20 @@ async function call(input: Input): Promise<Output> {
       host: parsedHost.host,
       port: input.port ?? parsedHost.port ?? 22,
       ...(input.identityFile && { identityFile: input.identityFile }),
+      targetUrl: sshTargetUrl(
+        parsedHost.host,
+        input.port ?? parsedHost.port ?? 22,
+      ),
+      ...(sshUsername(parsedHost.host) && {
+        username: sshUsername(parsedHost.host),
+      }),
+      authMethod: input.password
+        ? 'password'
+        : input.identityFile
+          ? 'identity_file'
+          : 'default',
+      credentialSource: input.password ? 'input' : 'none',
+      credentialAvailable: Boolean(input.password || input.identityFile),
     })
     if (input.password) {
       const port = input.port ?? parsedHost.port ?? 22
@@ -791,7 +848,7 @@ export const SSHRemoteTool = buildTool({
     return 'Save, reuse, inspect, and operate SSH connections with the local OpenSSH client.'
   },
   async prompt() {
-    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available. Do not bypass SSHRemote by building a Paramiko, Python, sshpass, or shell-based password client; retry or report the SSHRemote error so credentials remain host-managed. A transient connection failure is not a reason to abandon a long task: continue independent local work and retry when the reported nextRetryAt is reached. If a write command reports an unknown execution outcome, inspect remote state before deciding whether to run it again.'
+    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; only ask for credentials when the connection metadata says none are available. SSH compaction context exposes the target URL, username, identity-file path, authentication method, credential source/status, cwd, and lifecycle state; it never contains password or private-key material. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available. Do not bypass SSHRemote by building a Paramiko, Python, sshpass, or shell-based password client; retry or report the SSHRemote error so credentials remain host-managed. A transient connection failure is not a reason to abandon a long task: continue independent local work and retry when the reported nextRetryAt is reached. If a write command reports an unknown execution outcome, inspect remote state before deciding whether to run it again.'
   },
   renderToolUseMessage(input: Partial<Input>) {
     const target = input.name ?? input.host ?? ''
