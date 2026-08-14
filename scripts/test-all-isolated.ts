@@ -6,6 +6,7 @@ const isolated = [
   'src/utils/__tests__/cacheSafeParamsSlot.test.ts',
   'src/utils/__tests__/messages.test.ts',
   'src/utils/__tests__/uuid.test.ts',
+  'packages/builtin-tools/src/tools/AgentTool/__tests__/agentToolUtils.test.ts',
 ]
 
 const glob = new Glob('**/*.test.{ts,tsx}')

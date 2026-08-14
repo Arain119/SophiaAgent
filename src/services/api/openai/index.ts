@@ -59,15 +59,25 @@ import { getInitialSettings } from '../../../utils/settings/settings.js'
 import { getProviderApiKey } from '../../../utils/providerCredentials.js'
 import { getConfiguredProviderNameForModel } from '../../../utils/model/providers.js'
 import type { ResponsesProviderEndpoint } from './responsesAdapter.js'
-import { getSelectedResponsesProvider } from './providerRouting.js'
+import {
+  getSelectedResponsesProvider,
+  resolveResponsesProviderName,
+} from './providerRouting.js'
 
 function getResponsesProviders(
-  preferredProvider: string,
+  requestedProvider: string | undefined,
+  model: string,
 ): ResponsesProviderEndpoint[] {
   const settings = getInitialSettings()
+  const providers = settings.providers ?? {}
+  const selectedProvider = resolveResponsesProviderName(
+    providers,
+    requestedProvider,
+    getConfiguredProviderNameForModel(model, settings),
+  )
   return getSelectedResponsesProvider(
-    settings.providers ?? {},
-    preferredProvider,
+    providers,
+    selectedProvider,
     getProviderApiKey,
   )
 }
@@ -281,11 +291,7 @@ export async function* queryModelOpenAI(
         }),
         signal,
         fetchOverride: options.fetchOverride as unknown as typeof fetch,
-        providers: getResponsesProviders(
-          options.providerName ??
-            getConfiguredProviderNameForModel(options.model) ??
-            '',
-        ),
+        providers: getResponsesProviders(options.providerName, options.model),
       }),
       openaiModel,
     )

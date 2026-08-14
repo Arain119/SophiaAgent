@@ -63,6 +63,23 @@ describe('compact all tool activity', () => {
     ])
   })
 
+  test('does not group internal tools with no visible activity name', () => {
+    const use = toolUse('EnterPlanMode', 'plan-1', {})
+    const toolResult = result('plan-1')
+    const hiddenTool = {
+      name: 'EnterPlanMode',
+      aliases: [],
+      userFacingName: () => '',
+    }
+
+    expect(
+      collapseReadSearchGroups([use, toolResult], [
+        bashTool,
+        hiddenTool,
+      ] as never),
+    ).toEqual([use, toolResult])
+  })
+
   test('keeps the latest activity detail to one short line', () => {
     const hint = compactActivityHint(`run tests\n${'x'.repeat(120)}`)
     expect(hint).not.toContain('\n')

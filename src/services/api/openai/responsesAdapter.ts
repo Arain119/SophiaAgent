@@ -51,6 +51,7 @@ export type ResponsesProviderEndpoint = {
   name?: string
   baseUrl: string
   apiKey?: string
+  requiresApiKey?: boolean
 }
 
 class ResponsesAPIError extends Error {
@@ -590,6 +591,14 @@ async function fetchResponses(
   const apiKey = (
     endpoint ? endpoint.apiKey : process.env.OPENAI_API_KEY
   )?.trim()
+  if (endpoint?.requiresApiKey && !apiKey) {
+    throw new ResponsesAPIError(
+      `API key missing for provider "${endpoint.name}". Run /model.`,
+      false,
+      401,
+      'missing_api_key',
+    )
+  }
   const baseUrl = (
     endpoint?.baseUrl ||
     process.env.OPENAI_BASE_URL ||

@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { getSelectedResponsesProvider } from '../providerRouting.js'
+import {
+  getSelectedResponsesProvider,
+  resolveResponsesProviderName,
+} from '../providerRouting.js'
 
 const providers = {
   primary: {
@@ -25,6 +28,7 @@ describe('Responses provider routing', () => {
         name: 'secondary',
         baseUrl: 'https://secondary.example/v1',
         apiKey: 'secondary-key',
+        requiresApiKey: false,
       },
     ])
   })
@@ -33,5 +37,39 @@ describe('Responses provider routing', () => {
     expect(
       getSelectedResponsesProvider(providers, 'missing', () => 'key'),
     ).toEqual([])
+  })
+
+  test('falls back to the model route when a generic provider is requested', () => {
+    expect(resolveResponsesProviderName(providers, 'openai', 'primary')).toBe(
+      'primary',
+    )
+  })
+
+  test('preserves an explicitly configured provider', () => {
+    expect(
+      resolveResponsesProviderName(providers, 'secondary', 'primary'),
+    ).toBe('secondary')
+  })
+
+  test('marks the official OpenAI endpoint as authenticated', () => {
+    expect(
+      getSelectedResponsesProvider(
+        {
+          openai: {
+            protocol: 'openai-responses',
+            baseUrl: 'https://api.openai.com/v1',
+          },
+        },
+        'openai',
+        () => undefined,
+      ),
+    ).toEqual([
+      {
+        name: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: undefined,
+        requiresApiKey: true,
+      },
+    ])
   })
 })

@@ -249,6 +249,26 @@ export function getSearchExtraToolsOrReadInfo(
       isAbsorbedSilently: false,
     }
   }
+  // Internal transition tools intentionally omit a visible name and render
+  // their result as a dedicated status block. Grouping them would make the
+  // expanded activity renderer emit only a generic completion tick.
+  let userFacingName: unknown
+  try {
+    userFacingName = tool.userFacingName(toolInput as { [x: string]: unknown })
+  } catch {
+    userFacingName = toolName
+  }
+  if (typeof userFacingName !== 'string' || userFacingName.trim() === '') {
+    return {
+      isCollapsible: false,
+      isSearch: false,
+      isRead: false,
+      isList: false,
+      isREPL: false,
+      isMemoryWrite: false,
+      isAbsorbedSilently: false,
+    }
+  }
   if (!tool.isSearchOrReadCommand) {
     return {
       isCollapsible: true,

@@ -69,6 +69,30 @@ async function collectStream(
 }
 
 describe('createResponsesStream', () => {
+  test('fails locally when a named provider has no API key', async () => {
+    let attempts = 0
+    const fetchOverride = (async () => {
+      attempts += 1
+      return new Response('', { status: 200 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      createResponsesStream({
+        request: responsesRequest,
+        signal: new AbortController().signal,
+        fetchOverride,
+        providers: [
+          {
+            name: 'primary',
+            baseUrl: 'https://api.openai.com/v1',
+            requiresApiKey: true,
+          },
+        ],
+      }),
+    ).rejects.toThrow('API key missing for provider "primary". Run /model.')
+    expect(attempts).toBe(0)
+  })
+
   test('uses Bearer authentication for a configured API key', async () => {
     process.env.OPENAI_BASE_URL = 'https://api.openai.com/v1/'
     process.env.OPENAI_API_KEY = 'test-key'
