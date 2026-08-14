@@ -1527,6 +1527,12 @@ The agent is now running and will receive instructions via mailbox.`,
       };
     }
     if (data.status === 'completed') {
+      const inlineCompletionMarker = {
+        type: 'text' as const,
+        text: `<agent_completion mode="inline">
+The agent completed synchronously and its result is included above. Do not call TaskOutput for this result.
+</agent_completion>`,
+      };
       const worktreeData = data as Record<string, unknown>;
       const worktreeInfoText = worktreeData.worktreePath
         ? `\nworktreePath: ${worktreeData.worktreePath}\nworktreeBranch: ${worktreeData.worktreeBranch}`
@@ -1553,7 +1559,7 @@ The agent is now running and will receive instructions via mailbox.`,
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          content: contentOrMarker,
+          content: [...contentOrMarker, inlineCompletionMarker],
         };
       }
       return {
@@ -1561,6 +1567,7 @@ The agent is now running and will receive instructions via mailbox.`,
         type: 'tool_result',
         content: [
           ...contentOrMarker,
+          inlineCompletionMarker,
           {
             type: 'text',
             text: `agentId: ${data.agentId} (use SendMessage with to: '${data.agentId}' to continue this agent)${worktreeInfoText}

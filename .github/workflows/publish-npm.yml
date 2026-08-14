@@ -75,7 +75,7 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${VERSION#v}$" | head -1)
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${VERSION}$" | head -1)
 
           if [ -n "$PREV_TAG" ]; then
             COMMITS=$(git log "${PREV_TAG}..${VERSION}" --pretty=format:"- %s (%h)" --no-merges)

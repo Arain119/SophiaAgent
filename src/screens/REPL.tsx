@@ -4474,7 +4474,7 @@ export function REPL({
     // in a ScrollBox would mount all messages (~250 MB on long sessions —
     // the exact problem), so the kill switch and non-fullscreen paths must
     // fall through to the legacy render: no alt screen, dump to terminal
-    // scrollback, 30-cap + Ctrl+E. Reusing scrollRef is safe — normal-mode
+    // scrollback and virtualized history. Reusing scrollRef is safe — normal-mode
     // and transcript-mode are mutually exclusive (this early return), so
     // only one ScrollBox is ever mounted at a time.
     const transcriptScrollRef = isFullscreenEnvEnabled() && !disableVirtualScroll && !dumpMode ? scrollRef : undefined;
@@ -4483,7 +4483,9 @@ export function REPL({
         messages={transcriptMessages}
         tools={tools}
         commands={commands}
-        verbose={true}
+        // Keep transcript output compact by default. Ctrl+O toggles the
+        // shared verbose state when the user needs the complete tool output.
+        verbose={verbose}
         toolJSX={null}
         inProgressToolUseIDs={inProgressToolUseIDs}
         isMessageSelectorVisible={false}

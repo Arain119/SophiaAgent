@@ -176,7 +176,7 @@ export function buildAgentTerminalMemory(text: string): AgentTerminalMemory {
       /verification|validation|test|check|验证|测试|检查/,
     ]),
     remainingWork: collectSectionItems(sections, [
-      /remaining|next|blocker|todo|后续|下一步|阻塞|待办/,
+      /remaining|next|blocker|todo|剩余|后续|下一步|阻塞|待办/,
     ]),
   }
 }

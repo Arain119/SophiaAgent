@@ -15,6 +15,7 @@ import { useSelectedMessageBg } from '../messageActions.js';
 import { SentryErrorBoundary } from '../SentryErrorBoundary.js';
 import { ToolUseLoader } from '../ToolUseLoader.js';
 import { HookProgressMessage } from './HookProgressMessage.js';
+import { compactCommandDisplay } from '../../utils/compactCommandDisplay.js';
 
 type Props = {
   param: ToolUseBlockParam;
@@ -104,7 +105,10 @@ export function AssistantToolUseMessage({
     );
   }
 
-  if (userFacingToolName === '') {
+  // Internal tools may omit a display name, and resumed/partially parsed
+  // tool calls can produce undefined or whitespace here. Do not leave the
+  // generic completed tick visible without a label for those rows.
+  if (!hasVisibleToolName(userFacingToolName)) {
     return null;
   }
 
@@ -188,6 +192,10 @@ export function AssistantToolUseMessage({
   );
 }
 
+export function hasVisibleToolName(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 function renderToolUseMessage(
   tool: Tool,
   input: unknown,
@@ -198,7 +206,9 @@ function renderToolUseMessage(
     if (!parsed.success) {
       return '';
     }
-    return tool.renderToolUseMessage(parsed.data, { theme, verbose, commands });
+    const rendered = tool.renderToolUseMessage(parsed.data, { theme, verbose, commands });
+    if (verbose || typeof rendered !== 'string') return rendered;
+    return compactCommandDisplay(rendered);
   } catch (error) {
     logError(new Error(`Error rendering tool use message for ${tool.name}: ${error}`));
     return '';

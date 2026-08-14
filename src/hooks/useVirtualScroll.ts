@@ -172,6 +172,13 @@ export function useVirtualScroll(
   })
   const itemRefs = useRef(new Map<string, DOMElement>())
   const refCache = useRef(new Map<string, (el: DOMElement | null) => void>())
+  // When content is appended or measured heights change, preserve the first
+  // visible mounted item for users who are reading older history. The
+  // renderer follows the bottom only while sticky; this anchor prevents a
+  // spacer recalculation from moving a non-sticky viewport.
+  const anchorRequestRef = useRef<{ key: string; offset: number } | null>(null)
+  const previousItemCountRef = useRef(itemKeys.length)
+  const previousOffsetVersionRef = useRef(offsetVersionRef.current)
   // Inline ref-compare: must run before offsets is computed below. The
   // skip-flag guards useLayoutEffect from re-populating heightCache with
   // PRE-resize Yoga heights (useLayoutEffect reads Yoga from the frame
@@ -309,6 +316,36 @@ export function useVirtualScroll(
   }
   const offsets = offsetsRef.current.arr
   const totalHeight = offsets[n]!
+
+  // Render runs while the previous DOM layout is still available. Capture an
+  // anchor only for structural/measurement changes, never for ordinary scroll
+  // renders, so manual scrolling remains authoritative.
+  const contentChanged =
+    itemKeys.length !== previousItemCountRef.current ||
+    offsetVersionRef.current !== previousOffsetVersionRef.current
+  if (contentChanged && !scrollRef.current?.isSticky()) {
+    const scrollTop = scrollRef.current?.getScrollTop() ?? 0
+    let candidate: { key: string; top: number } | undefined
+    for (const [key, el] of itemRefs.current) {
+      const top = el.yogaNode?.getComputedTop()
+      if (top == null) continue
+      if (top >= scrollTop && (!candidate || top < candidate.top)) candidate = { key, top }
+    }
+    if (!candidate) {
+      for (const [key, el] of itemRefs.current) {
+        const top = el.yogaNode?.getComputedTop()
+        if (top == null) continue
+        if (!candidate || Math.abs(top - scrollTop) < Math.abs(candidate.top - scrollTop)) {
+          candidate = { key, top }
+        }
+      }
+    }
+    // ScrollBox applies `scrollTop = elementTop + offset`; negate the
+    // element's current viewport-relative position to preserve that position.
+    if (candidate) anchorRequestRef.current = { key: candidate.key, offset: scrollTop - candidate.top }
+  }
+  previousItemCountRef.current = itemKeys.length
+  previousOffsetVersionRef.current = offsetVersionRef.current
 
   let start: number
   let end: number
@@ -616,6 +653,12 @@ export function useVirtualScroll(
   // different spacer heights → visible flicker. Heights propagate to
   // offsets on the next natural render. One-frame lag, absorbed by overscan.
   useLayoutEffect(() => {
+    const anchor = anchorRequestRef.current
+    if (anchor && !scrollRef.current?.isSticky()) {
+      const el = itemRefs.current.get(anchor.key)
+      if (el) scrollRef.current?.scrollToElement(el, anchor.offset)
+    }
+    anchorRequestRef.current = null
     const spacerYoga = spacerRef.current?.yogaNode
     if (spacerYoga && spacerYoga.getComputedWidth() > 0) {
       listOriginRef.current = spacerYoga.getComputedTop()

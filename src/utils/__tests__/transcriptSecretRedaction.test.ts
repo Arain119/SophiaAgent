@@ -8,6 +8,7 @@ import {
 import {
   redactSecretText,
   redactTranscriptSecrets,
+  extractSshCredentialForModel,
 } from '../transcriptSecretRedaction.js'
 
 function memoryCredentialStorage() {
@@ -107,5 +108,36 @@ describe('transcript secret redaction', () => {
     expect(serialized).not.toContain('tool-password')
     expect(serialized).toContain('[stored credential]')
     expect(captured.get('deploy@example.com:2222')).toBe('tool-password')
+  })
+
+  test('repairs Chinese mojibake before transcript persistence', () => {
+    const messages = [
+      {
+        type: 'user',
+        message: { role: 'user', content: '缁撴灉' },
+      },
+    ] as unknown as Message[]
+
+    const serialized = JSON.stringify(redactTranscriptSecrets(messages))
+    expect(serialized).toContain('结果')
+    expect(serialized).not.toContain('缁撴灉')
+  })
+
+  test('replaces an SSH password before the prompt reaches the model', () => {
+    const captured = new Map<string, string>()
+    const safe = extractSshCredentialForModel(
+      'ssh -p 2222 deploy@example.com 密码: prompt-secret',
+      (host, port, password) => captured.set(`${host}:${port}`, password),
+    )
+    expect(safe).toContain('[stored credential]')
+    expect(safe).not.toContain('prompt-secret')
+    expect(captured.get('deploy@example.com:2222')).toBe('prompt-secret')
+  })
+
+  test('keeps the prompt unchanged if secure storage rejects the credential', () => {
+    const input = 'ssh deploy@example.com password: still-visible-to-user'
+    expect(
+      extractSshCredentialForModel(input, () => new Error('storage failed')),
+    ).toBe(input)
   })
 })

@@ -299,7 +299,7 @@ export async function autoCompactIfNeeded(
   // EXPERIMENT: Try session memory compaction first
   const sessionMemoryResult = await trySessionMemoryCompaction(
     messages,
-    toolUseContext.agentId,
+    toolUseContext,
     recompactionInfo.autoCompactThreshold,
   )
   if (sessionMemoryResult) {

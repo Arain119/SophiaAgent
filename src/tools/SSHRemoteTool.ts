@@ -19,6 +19,10 @@ import {
   removeSshPassword,
   setSshPassword,
 } from '../utils/sshCredentials.js'
+import {
+  clearSshConnectionContinuity,
+  recordSshConnectionContinuity,
+} from '../utils/sshConnectionContinuity.js'
 
 const inputSchema = lazySchema(() =>
   z
@@ -122,6 +126,7 @@ type Output = {
   nextRetryAt?: number
 }
 type Connection = {
+  name?: string
   host: string
   port?: number
   identityFile?: string
@@ -263,7 +268,8 @@ async function resolveConnection(input: Input): Promise<Connection> {
   const parsedHost = parseSshHost(rawHost)
   const host = parsedHost.host
   const port = input.port ?? parsedHost.port ?? saved?.port
-  return {
+  const connection: Connection = {
+    ...(input.name && { name: input.name }),
     host,
     port,
     identityFile: input.identityFile ?? saved?.identityFile,
@@ -272,6 +278,13 @@ async function resolveConnection(input: Input): Promise<Connection> {
       sessionPasswords.get(passwordKey({ host, port })) ??
       getSshPassword(host, port ?? 22),
   }
+  await recordSshConnectionContinuity({
+    ...(input.name && { name: input.name }),
+    host,
+    port: port ?? 22,
+    ...(connection.identityFile && { identityFile: connection.identityFile }),
+  })
+  return connection
 }
 
 function connectionKey(connection: Connection): string {
@@ -343,6 +356,28 @@ function updateConnectionState(
   }
 }
 
+async function persistConnectionContinuity(
+  connection: Connection,
+  state: ConnectionLifecycleState['state'],
+  cwd?: string,
+): Promise<void> {
+  const lifecycle = connectionStates.get(connectionKey(connection))
+  await recordSshConnectionContinuity({
+    ...(connection.name && { name: connection.name }),
+    host: connection.host,
+    port: connection.port ?? 22,
+    ...(connection.identityFile && { identityFile: connection.identityFile }),
+    ...(cwd && { cwd }),
+    state,
+    ...(lifecycle?.lastSuccessAt && {
+      lastSuccessAt: lifecycle.lastSuccessAt,
+    }),
+    ...(lifecycle?.lastFailureAt && {
+      lastFailureAt: lifecycle.lastFailureAt,
+    }),
+  })
+}
+
 function scheduleConnectionProbe(
   connection: Connection,
   controlPath: string,
@@ -372,10 +407,13 @@ function scheduleConnectionProbe(
       if (output.exitCode === 0) {
         connectionPaths.set(key, controlPath)
         updateConnectionState(connection, 'ready')
+        await persistConnectionContinuity(connection, 'ready')
       } else if (authenticationFailed(output)) {
         updateConnectionState(connection, 'blocked', output)
+        await persistConnectionContinuity(connection, 'blocked')
       } else {
         updateConnectionState(connection, 'degraded', output)
+        await persistConnectionContinuity(connection, 'degraded')
         scheduleConnectionProbe(connection, controlPath)
       }
     })()
@@ -403,6 +441,24 @@ function formatConnectionState(state: ConnectionLifecycleState): string {
   })
 }
 
+export function getSshControlArgs(
+  controlPath: string,
+  currentPlatform: NodeJS.Platform = platform(),
+): string[] {
+  // Windows OpenSSH does not implement Unix-domain ControlMaster sockets.
+  // Passing these options connects successfully, then fails locally with
+  // "getsockname failed: Not a socket" before returning command output.
+  if (currentPlatform === 'win32') return []
+  return [
+    '-o',
+    'ControlMaster=auto',
+    '-o',
+    'ControlPersist=300',
+    '-o',
+    `ControlPath=${controlPath}`,
+  ]
+}
+
 function sshArgs(connection: Connection, controlPath: string): string[] {
   const args = [
     'ssh',
@@ -412,12 +468,7 @@ function sshArgs(connection: Connection, controlPath: string): string[] {
     'StrictHostKeyChecking=accept-new',
     '-o',
     'ConnectTimeout=10',
-    '-o',
-    'ControlMaster=auto',
-    '-o',
-    'ControlPersist=300',
-    '-o',
-    `ControlPath=${controlPath}`,
+    ...getSshControlArgs(controlPath),
   ]
   if (connection.port !== undefined) {
     args.push('-p', String(connection.port))
@@ -518,12 +569,21 @@ async function runRemoteCommand(input: Input): Promise<Output> {
 
   if (input.action === 'disconnect') {
     connectionPaths.delete(key)
-    const output = await spawnSsh(
-      [...args, '-O', 'exit', connection.host],
-      Math.min(timeoutMs, 15_000),
-      connection.password,
-    )
+    await unlink(controlPath).catch(() => {})
+    const output =
+      platform() === 'win32'
+        ? {
+            stdout: 'Cleared local SSH connection state.\n',
+            stderr: '',
+            exitCode: 0,
+          }
+        : await spawnSsh(
+            [...args, '-O', 'exit', connection.host],
+            Math.min(timeoutMs, 15_000),
+            connection.password,
+          )
     updateConnectionState(connection, 'disconnected')
+    await persistConnectionContinuity(connection, 'disconnected')
     return output
   }
 
@@ -533,6 +593,7 @@ async function runRemoteCommand(input: Input): Promise<Output> {
     ? `cd -- ${shellQuote(input.cwd)} && ${command}`
     : command
   updateConnectionState(connection, 'connecting')
+  await persistConnectionContinuity(connection, 'connecting')
   let output: Output = await spawnSsh(
     [...args, connection.host, remoteCommand],
     timeoutMs,
@@ -572,10 +633,13 @@ async function runRemoteCommand(input: Input): Promise<Output> {
     sessionPasswords.delete(passwordKey(connection))
     removeSshPassword(connection.host, connection.port ?? 22)
   }
-  if (output.exitCode === 0) updateConnectionState(connection, 'ready')
-  else if (authenticationFailed(output))
+  if (output.exitCode === 0) {
+    updateConnectionState(connection, 'ready')
+    await persistConnectionContinuity(connection, 'ready', input.cwd)
+  } else if (authenticationFailed(output)) {
     updateConnectionState(connection, 'blocked', output)
-  else if (connectionFailed(output)) {
+    await persistConnectionContinuity(connection, 'blocked')
+  } else if (connectionFailed(output)) {
     connectionPaths.delete(key)
     await unlink(controlPath).catch(() => {})
     updateConnectionState(connection, 'degraded', output)
@@ -583,6 +647,11 @@ async function runRemoteCommand(input: Input): Promise<Output> {
     const state = connectionStates.get(key)
     output.retryDisposition = safeToReplay ? 'safe' : 'unknown'
     output.nextRetryAt = state?.nextRetryAt
+    await persistConnectionContinuity(connection, 'degraded')
+  } else {
+    // A non-zero remote command exit still proves the SSH transport is ready.
+    updateConnectionState(connection, 'ready')
+    await persistConnectionContinuity(connection, 'ready')
   }
   return output
 }
@@ -640,8 +709,14 @@ async function call(input: Input): Promise<Output> {
       }),
     }
     await writeConnections(connections)
+    const parsedHost = parseSshHost(input.host!)
+    await recordSshConnectionContinuity({
+      name,
+      host: parsedHost.host,
+      port: input.port ?? parsedHost.port ?? 22,
+      ...(input.identityFile && { identityFile: input.identityFile }),
+    })
     if (input.password) {
-      const parsedHost = parseSshHost(input.host!)
       const port = input.port ?? parsedHost.port ?? 22
       sessionPasswords.set(
         passwordKey({ host: parsedHost.host, port }),
@@ -694,6 +769,7 @@ async function call(input: Input): Promise<Output> {
       }
     }
     await writeConnections(connections)
+    await clearSshConnectionContinuity(name)
     return {
       stdout: `Removed SSH connection "${name}".\n`,
       stderr: '',
@@ -715,7 +791,7 @@ export const SSHRemoteTool = buildTool({
     return 'Save, reuse, inspect, and operate SSH connections with the local OpenSSH client.'
   },
   async prompt() {
-    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available. A transient connection failure is not a reason to abandon a long task: continue independent local work and retry when the reported nextRetryAt is reached. If a write command reports an unknown execution outcome, inspect remote state before deciding whether to run it again.'
+    return 'Use SSHRemote automatically when the user provides an SSH host/URL and password. Extract user, host, port, command, and password from the same user message and call the tool directly; do not ask the user to re-enter them. Use the cwd field instead of embedding cd in command. Keep remote commands small and avoid nested SSH commands or heredocs when structured fields suffice. A successfully used password is stored in local credential storage and automatically reused across Sophia sessions; never repeat it in output. Save named connections for reusable targets, and prefer the local SSH agent or private-key path when available. Do not bypass SSHRemote by building a Paramiko, Python, sshpass, or shell-based password client; retry or report the SSHRemote error so credentials remain host-managed. A transient connection failure is not a reason to abandon a long task: continue independent local work and retry when the reported nextRetryAt is reached. If a write command reports an unknown execution outcome, inspect remote state before deciding whether to run it again.'
   },
   renderToolUseMessage(input: Partial<Input>) {
     const target = input.name ?? input.host ?? ''

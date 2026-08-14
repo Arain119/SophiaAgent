@@ -7,7 +7,7 @@ import { getInvokedSkillsForAgent } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
-import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import type { TaskState } from '../../tasks/types.js'
 import { FileReadTool } from '@sophia-agent/builtin-tools/tools/FileReadTool/FileReadTool.js'
 import {
   FILE_READ_TOOL_NAME,
@@ -77,6 +77,7 @@ import { jsonStringify } from '../../utils/slowOperations.js'
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
+import { getSshCompactContext } from '../../utils/sshConnectionContinuity.js'
 import { getSmallFastModel } from '../../utils/model/model.js'
 import {
   getTokenUsage,
@@ -578,13 +579,14 @@ export async function compactConversation(
       messages.at(-1)?.uuid,
     )
     const transcriptPath = getTranscriptPath()
+    const sshContext = await getSshCompactContext()
     const summaryMessages: UserMessage[] = [
       createUserMessage({
-        content: getCompactUserSummaryMessage(
+        content: `${getCompactUserSummaryMessage(
           summary,
           suppressFollowUpQuestions,
           transcriptPath,
-        ),
+        )}${sshContext ? `\n\n${sshContext}` : ''}`,
         isCompactSummary: true,
         isVisibleInTranscriptOnly: true,
       }),
@@ -974,9 +976,10 @@ export async function partialCompactConversation(
       messagesToSummarize.length,
     )
     const transcriptPath = getTranscriptPath()
+    const sshContext = await getSshCompactContext()
     const summaryMessages: UserMessage[] = [
       createUserMessage({
-        content: getCompactUserSummaryMessage(summary, false, transcriptPath),
+        content: `${getCompactUserSummaryMessage(summary, false, transcriptPath)}${sshContext ? `\n\n${sshContext}` : ''}`,
         isCompactSummary: true,
         ...(messagesToKeep.length > 0
           ? {
@@ -1485,42 +1488,54 @@ export async function createPlanModeAttachmentIfNeeded(
 }
 
 /**
- * Creates attachments for async agents so the model knows about them after
- * compaction. Covers both agents still running in the background (so the model
- * doesn't spawn a duplicate) and agents that have finished but whose results
- * haven't been retrieved yet.
+ * Restores actionable background task handles after compaction. Pending and
+ * running tasks prevent duplicate launches; unconsumed terminal tasks remain
+ * available through TaskOutput.
  */
 export async function createAsyncAgentAttachmentsIfNeeded(
   context: ToolUseContext,
 ): Promise<AttachmentMessage[]> {
   const appState = context.getAppState()
-  const asyncAgents = Object.values(appState.tasks).filter(
-    (task): task is LocalAgentTaskState => task.type === 'local_agent',
-  )
-
-  return asyncAgents.flatMap(agent => {
-    if (
-      agent.retrieved ||
-      agent.status === 'pending' ||
-      agent.agentId === context.agentId
-    ) {
+  return Object.values(appState.tasks).flatMap(task => {
+    const isCurrentAgent =
+      (task.type === 'local_agent' && task.agentId === context.agentId) ||
+      (task.type === 'in_process_teammate' &&
+        task.identity.agentId === context.agentId)
+    const wasConsumed =
+      task.type === 'local_agent'
+        ? task.retrieved
+        : task.notified &&
+          (task.status === 'completed' ||
+            task.status === 'failed' ||
+            task.status === 'killed')
+    if (isCurrentAgent || wasConsumed) {
       return []
     }
+    const taskId = task.type === 'local_agent' ? task.agentId : task.id
     return [
       createAttachmentMessage({
         type: 'task_status',
-        taskId: agent.agentId,
-        taskType: 'local_agent',
-        description: agent.description,
-        status: agent.status,
-        deltaSummary:
-          agent.status === 'running'
-            ? (agent.progress?.summary ?? null)
-            : (agent.error ?? null),
-        outputFilePath: getTaskOutputPath(agent.agentId),
+        taskId,
+        taskType: task.type,
+        description: task.description,
+        status: task.status,
+        deltaSummary: getCompactTaskSummary(task),
+        outputFilePath: task.outputFile || getTaskOutputPath(taskId),
       }),
     ]
   })
+}
+
+function getCompactTaskSummary(task: TaskState): string | null {
+  if (task.type === 'local_agent' || task.type === 'in_process_teammate') {
+    return task.status === 'running'
+      ? (task.progress?.summary ?? null)
+      : (task.error ?? null)
+  }
+  if (task.type === 'local_workflow') {
+    return task.error ?? task.summary ?? null
+  }
+  return task.result?.terminationReason ?? null
 }
 
 /**

@@ -5,12 +5,14 @@ import { Box, Text } from '@anthropic/ink';
 import { extractTag } from '../../utils/messages.js';
 import { Markdown } from '../Markdown.js';
 import { MessageResponse } from '../MessageResponse.js';
+import { OutputLine } from '../shell/OutputLine.js';
 
 type Props = {
   content: string;
+  verbose: boolean;
 };
 
-export function UserLocalCommandOutputMessage({ content }: Props): React.ReactNode {
+export function UserLocalCommandOutputMessage({ content, verbose }: Props): React.ReactNode {
   const stdout = extractTag(content, 'local-command-stdout');
   const stderr = extractTag(content, 'local-command-stderr');
   if (!stdout && !stderr) {
@@ -23,17 +25,36 @@ export function UserLocalCommandOutputMessage({ content }: Props): React.ReactNo
 
   const lines: React.ReactNode[] = [];
   if (stdout?.trim()) {
-    lines.push(<IndentedContent key="stdout">{stdout.trim()}</IndentedContent>);
+    lines.push(
+      <IndentedContent key="stdout" verbose={verbose}>
+        {stdout.trim()}
+      </IndentedContent>,
+    );
   }
   if (stderr?.trim()) {
-    lines.push(<IndentedContent key="stderr">{stderr.trim()}</IndentedContent>);
+    lines.push(
+      <IndentedContent key="stderr" verbose={verbose} isError>
+        {stderr.trim()}
+      </IndentedContent>,
+    );
   }
   return lines;
 }
 
-function IndentedContent({ children }: { children: string }): React.ReactNode {
+function IndentedContent({
+  children,
+  verbose,
+  isError = false,
+}: {
+  children: string;
+  verbose: boolean;
+  isError?: boolean;
+}): React.ReactNode {
   if (children.startsWith(`${DIAMOND_OPEN} `) || children.startsWith(`${DIAMOND_FILLED} `)) {
     return <CloudLaunchContent>{children}</CloudLaunchContent>;
+  }
+  if (!verbose) {
+    return <OutputLine content={children} verbose={false} isError={isError} />;
   }
   return (
     <Box flexDirection="row">

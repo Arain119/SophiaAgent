@@ -166,8 +166,6 @@ type Props = {
   renderRange?: readonly [start: number, end: number];
 };
 
-const MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE = 30;
-
 // Safety cap for the non-virtualized render path (fullscreen off or
 // explicitly disabled). Ink mounts a full fiber tree per message (~250 KB
 // RSS each); yoga layout height grows unbounded; the screen buffer is sized
@@ -297,57 +295,23 @@ const MessagesImpl = ({
     return false;
   }, [streamingThinking]);
 
-  // Find the last thinking block and latest bash output in a single backward pass.
-  // Merged from two separate reverse iterations to reduce total traversals.
-  const { lastThinkingBlockId, latestBashOutputUUID } = useMemo(() => {
-    let thinkingId: string | null = null;
-    let bashUUID: string | null = null;
-    const needThinkingScan = hidePastThinking && !isStreamingThinkingVisible;
-    if (hidePastThinking && isStreamingThinkingVisible) {
-      thinkingId = 'streaming';
-    }
+  const lastThinkingBlockId = useMemo(() => {
+    if (!hidePastThinking) return null;
+    if (isStreamingThinkingVisible) return 'streaming';
     for (let i = normalizedMessages.length - 1; i >= 0; i--) {
       const msg = normalizedMessages[i];
       if (msg?.type === 'user') {
-        const content = msg.message!.content as Array<{ type: string; text?: string }>;
-        // Bash output detection
-        if (!bashUUID) {
-          for (const block of content) {
-            if (block.type === 'text') {
-              const text = block.text ?? '';
-              if (text.startsWith('<bash-stdout') || text.startsWith('<bash-stderr')) {
-                bashUUID = msg.uuid;
-                break;
-              }
-            }
-          }
-        }
-        // Thinking stop condition — reached a previous user turn without tool result
-        if (needThinkingScan && !thinkingId) {
-          const hasToolResult = content.some(block => block.type === 'tool_result');
-          if (!hasToolResult) {
-            thinkingId = 'no-thinking';
-          }
-        }
+        const content = msg.message!.content as Array<{ type: string }>;
+        if (!content.some(block => block.type === 'tool_result')) return 'no-thinking';
       } else if (msg?.type === 'assistant') {
-        if (needThinkingScan && !thinkingId) {
-          const content = msg.message!.content as Array<{ type: string }>;
-          for (let j = content.length - 1; j >= 0; j--) {
-            if (content[j]?.type === 'thinking') {
-              thinkingId = `${msg.uuid}:${j}`;
-              break;
-            }
-          }
+        const content = msg.message!.content as Array<{ type: string }>;
+        for (let j = content.length - 1; j >= 0; j--) {
+          if (content[j]?.type === 'thinking') return `${msg.uuid}:${j}`;
         }
       }
-      if (thinkingId !== null && bashUUID) break;
     }
-    if (!hidePastThinking) {
-      thinkingId = null;
-    }
-    return { lastThinkingBlockId: thinkingId, latestBashOutputUUID: bashUUID };
+    return null;
   }, [normalizedMessages, hidePastThinking, isStreamingThinkingVisible]);
-
   // streamingToolUses updates on every input_json_delta while normalizedMessages
   // stays stable — precompute the Set so the filter is O(k) not O(n×k) per chunk.
   const normalizedToolUseIDs = useMemo(() => getToolUseIDs(normalizedMessages), [normalizedMessages]);
@@ -385,7 +349,10 @@ const MessagesImpl = ({
   // only passed when isFullscreenEnvEnabled() is true (REPL.tsx gates it),
   // so scrollRef's presence is the signal.
   const virtualScrollRuntimeGate = scrollRef != null && !disableVirtualScroll;
-  const shouldTruncate = isTranscriptMode && !showAllInTranscript && !virtualScrollRuntimeGate;
+  // Fullscreen transcript uses virtualization, so the complete history is
+  // always available. Do not apply the old 30-message transcript window;
+  // limiting history here made the beginning of a session unreachable.
+  const shouldTruncate = false;
 
   // Anchor for the first rendered message in the non-virtualized cap slice.
   // Monotonic advance only — mutation during render is idempotent (safe
@@ -429,12 +396,8 @@ const MessagesImpl = ({
       ) as Parameters<typeof reorderMessagesInUI>[0],
       syntheticStreamingToolUseMessages,
     );
-    const messagesToShow = shouldTruncate
-      ? messagesToShowNotTruncated.slice(-MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE)
-      : messagesToShowNotTruncated;
-
-    const hasTruncatedMessages =
-      shouldTruncate && messagesToShowNotTruncated.length > MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE;
+    const messagesToShow = messagesToShowNotTruncated;
+    const hasTruncatedMessages = false;
 
     const activityMessages = collapseTaskOutputPolls(messagesToShow as RenderableMessage[], verbose);
     let collapsed: RenderableMessage[];
@@ -529,7 +492,7 @@ const MessagesImpl = ({
       };
     }
 
-    const hiddenMessageCount = messagesToShowNotTruncated.length - MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE;
+    const hiddenMessageCount = 0;
 
     return {
       collapsed,
@@ -684,7 +647,6 @@ const MessagesImpl = ({
         screen={screen}
         canAnimate={canAnimate}
         lastThinkingBlockId={lastThinkingBlockId}
-        latestBashOutputUUID={latestBashOutputUUID}
         columns={columns}
         isLoading={isLoading}
         lookups={lookups}

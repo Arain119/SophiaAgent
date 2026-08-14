@@ -57,7 +57,6 @@ export type Props = {
   screen: Screen;
   canAnimate: boolean;
   lastThinkingBlockId: string | null;
-  latestBashOutputUUID: string | null;
   columns: number;
   isLoading: boolean;
   lookups: ReturnType<typeof buildMessageLookups>;
@@ -135,7 +134,6 @@ function MessageRowImpl({
   screen,
   canAnimate,
   lastThinkingBlockId,
-  latestBashOutputUUID,
   columns,
   isLoading,
   lookups,
@@ -207,7 +205,6 @@ function MessageRowImpl({
       isActiveCollapsedGroup={isActiveCollapsedGroup}
       isUserContinuation={isUserContinuation}
       lastThinkingBlockId={lastThinkingBlockId}
-      latestBashOutputUUID={latestBashOutputUUID}
       shouldCollapseDiffs={shouldCollapseDiffs}
     />
   );
@@ -301,11 +298,6 @@ export function areMessageRowPropsEqual(prev: Props, next: Props): boolean {
 
   // Width change affects Box layout
   if (prev.columns !== next.columns) return false;
-
-  // latestBashOutputUUID affects rendering (full vs truncated output)
-  const prevIsLatestBash = prev.latestBashOutputUUID === prev.message.uuid;
-  const nextIsLatestBash = next.latestBashOutputUUID === next.message.uuid;
-  if (prevIsLatestBash !== nextIsLatestBash) return false;
 
   // lastThinkingBlockId affects thinking block visibility — but only for
   // messages that HAVE thinking content. Checking unconditionally busts the

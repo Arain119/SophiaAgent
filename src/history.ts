@@ -15,6 +15,7 @@ import {
 } from './utils/pasteStore.js'
 import { sleep } from './utils/sleep.js'
 import { jsonParse, jsonStringify } from './utils/slowOperations.js'
+import { sanitizeTextForPersistence } from './utils/persistenceSanitization.js'
 
 const MAX_HISTORY_ITEMS = 100
 const MAX_PASTED_CONTENT_LENGTH = 1024
@@ -357,8 +358,8 @@ async function addToPromptHistory(
 ): Promise<void> {
   const entry =
     typeof command === 'string'
-      ? { display: command, pastedContents: {} }
-      : command
+      ? { display: sanitizeTextForPersistence(command), pastedContents: {} }
+      : { ...command, display: sanitizeTextForPersistence(command.display) }
 
   const storedPastedContents: Record<number, StoredPastedContent> = {}
   if (entry.pastedContents) {
@@ -373,14 +374,15 @@ async function addToPromptHistory(
         storedPastedContents[Number(id)] = {
           id: content.id,
           type: content.type,
-          content: content.content,
+          content: sanitizeTextForPersistence(content.content),
           mediaType: content.mediaType,
           filename: content.filename,
         }
       } else {
         // For large text content, compute hash synchronously and store reference
         // The actual disk write happens async (fire-and-forget)
-        const hash = hashPastedText(content.content)
+        const sanitizedContent = sanitizeTextForPersistence(content.content)
+        const hash = hashPastedText(sanitizedContent)
         storedPastedContents[Number(id)] = {
           id: content.id,
           type: content.type,
@@ -389,7 +391,7 @@ async function addToPromptHistory(
           filename: content.filename,
         }
         // Fire-and-forget disk write - don't block history entry creation
-        void storePastedText(hash, content.content)
+        void storePastedText(hash, sanitizedContent)
       }
     }
   }

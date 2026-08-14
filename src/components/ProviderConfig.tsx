@@ -22,7 +22,11 @@ type Props = {
 
 export type ProviderConfigResult = 'saved' | 'cancelled';
 
-type ProviderView = { kind: 'form'; existingName?: string } | { kind: 'remove'; name: string } | null;
+type ProviderView =
+  | { kind: 'provider'; name: string }
+  | { kind: 'form'; existingName?: string }
+  | { kind: 'remove'; name: string }
+  | null;
 
 const FIELDS: ProviderField[] = ['name', 'baseUrl', 'apiKey'];
 
@@ -50,7 +54,6 @@ function getInitialValues(existingName?: string): ProviderValues {
 
 export function ProviderConfig({ onDone }: Props): React.ReactNode {
   const [view, setView] = useState<ProviderView>(null);
-  const [error, setError] = useState<string | null>(null);
   const [didChange, setDidChange] = useState(false);
   const [, refresh] = useState(0);
   const setAppState = useSetAppState();
@@ -83,83 +86,81 @@ export function ProviderConfig({ onDone }: Props): React.ReactNode {
     refresh(value => value + 1);
   }, [setAppState]);
 
-  const selectAction = useCallback(
-    (value: string) => {
-      setError(null);
-      const separator = value.indexOf(':');
-      const action = separator === -1 ? value : value.slice(0, separator);
-      const name = separator === -1 ? '' : value.slice(separator + 1);
-
-      if (action === 'done') {
-        finish('saved');
-        return;
-      }
-      if (action === 'add') {
-        setView({
-          kind: 'form',
-        });
-        return;
-      }
-      if (action === 'edit') {
-        const profile = profiles[name];
-        if (profile) {
-          setView({
-            kind: 'form',
-            existingName: name,
-          });
-        }
-        return;
-      }
-      if (action === 'remove') {
-        setView({ kind: 'remove', name });
-        return;
-      }
-    },
-    [completeChange, finish, profiles],
-  );
+  const selectedProfile = view?.kind === 'provider' ? profiles[view.name] : undefined;
+  const title = view?.kind === 'remove' ? 'Remove provider' : view?.kind === 'form' ? 'Provider details' : 'Providers';
 
   return (
     <Dialog
-      title="Provider"
+      title={title}
       color={view?.kind === 'remove' ? 'error' : 'permission'}
       onCancel={() => (view ? setView(null) : finish(didChange ? 'saved' : 'cancelled'))}
     >
       {view?.kind === 'remove' ? (
-        <ProviderRemovalConfirmation name={view.name} onBack={() => setView(null)} onRemoved={completeChange} />
+        <ProviderRemovalConfirmation
+          name={view.name}
+          onBack={() => setView({ kind: 'provider', name: view.name })}
+          onRemoved={completeChange}
+        />
       ) : view?.kind === 'form' ? (
         <ProviderForm
           key={view.existingName ?? 'new'}
           existingName={view.existingName}
-          onBack={() => setView(null)}
+          onBack={() => (view.existingName ? setView({ kind: 'provider', name: view.existingName }) : setView(null))}
           onSaved={completeChange}
         />
-      ) : (
+      ) : view?.kind === 'provider' && selectedProfile ? (
         <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text color="success">{view.name}</Text>
+            <Text dimColor>{selectedProfile.baseUrl}</Text>
+          </Box>
           <Select
             options={[
-              ...Object.keys(profiles).flatMap(name => [
-                {
-                  label: `Edit ${name}`,
-                  value: `edit:${name}`,
-                },
-                {
-                  label: `Remove ${name}`,
-                  value: `remove:${name}`,
-                },
-              ]),
-              { label: 'Add OpenAI Responses provider', value: 'add' },
+              { label: 'Edit', value: 'edit' },
+              { label: 'Remove', value: 'remove' },
+              { label: 'Back', value: 'back' },
+            ]}
+            onChange={action => {
+              if (action === 'edit') setView({ kind: 'form', existingName: view.name });
+              else if (action === 'remove') setView({ kind: 'remove', name: view.name });
+              else setView(null);
+            }}
+            onCancel={() => setView(null)}
+          />
+        </Box>
+      ) : (
+        <Box flexDirection="column" gap={1}>
+          {isConfigured ? <Text dimColor>Configured providers</Text> : null}
+          <Select
+            options={[
+              ...Object.entries(profiles).map(([name, profile]) => ({
+                label: `${name}  ${formatProviderLocation(profile.baseUrl)}`,
+                value: `open:${name}`,
+              })),
+              { label: 'Add provider', value: 'add' },
               { label: 'Done', value: 'done' },
             ]}
-            onChange={selectAction}
+            onChange={value => {
+              if (value === 'done') finish('saved');
+              else if (value === 'add') setView({ kind: 'form' });
+              else if (value.startsWith('open:')) setView({ kind: 'provider', name: value.slice(5) });
+            }}
           />
-          {!isConfigured ? <Text dimColor>Add a named provider to start.</Text> : null}
-          {error ? <Text color="error">{error}</Text> : null}
+          {!isConfigured ? <Text dimColor>Add a provider to configure model routing.</Text> : null}
         </Box>
       )}
     </Dialog>
   );
 }
 
+function formatProviderLocation(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    return url.host;
+  } catch {
+    return baseUrl;
+  }
+}
 function ProviderRemovalConfirmation({
   name,
   onBack,
@@ -259,7 +260,7 @@ function ProviderForm({
 
   return (
     <Box flexDirection="column" gap={1}>
-      <Text bold>OpenAI Responses</Text>
+      <Text bold>{existingName ? `Edit ${existingName}` : 'New provider'}</Text>
       <Box flexDirection="column">
         {FIELDS.map(field => {
           const active = activeField === field;

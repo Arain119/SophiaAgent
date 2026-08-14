@@ -15,6 +15,7 @@ import { DiagnosticsDisplay } from '../DiagnosticsDisplay.js';
 import { getContentText } from 'src/utils/messages.js';
 import type { Theme } from 'src/utils/theme.js';
 import { UserImageMessage } from './UserImageMessage.js';
+import { OutputLine } from '../shell/OutputLine.js';
 
 import { jsonParse } from '../../utils/slowOperations.js';
 import { plural } from '../../utils/stringUtils.js';
@@ -277,7 +278,7 @@ export function AttachmentMessage({ attachment, addMargin, verbose, isTranscript
       return (
         <>
           <Line color="error">{attachment.hookName} hook returned blocking error</Line>
-          {stderr ? <Line color="error">{stderr}</Line> : null}
+          {stderr ? <OutputLine content={stderr} verbose={verbose} isError /> : null}
         </>
       );
     }

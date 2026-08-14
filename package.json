@@ -1,6 +1,6 @@
 {
   "name": "sophiaagent",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "Sophia Agent - a focused terminal AI coding assistant",
   "repository": {
     "type": "git",
@@ -125,6 +125,7 @@
     "fuse.js": "^7.3.0",
     "https-proxy-agent": "^8.0.0",
     "ignore": "^7.0.5",
+    "iconv-lite": "^0.7.3",
     "image-processor-napi": "workspace:*",
     "jsonc-parser": "^3.3.1",
     "knip": "^6.4.1",

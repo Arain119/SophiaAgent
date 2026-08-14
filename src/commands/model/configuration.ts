@@ -1,3 +1,4 @@
+import { MODEL_PRESETS } from '../../utils/providerProfiles.js'
 import type {
   AgentModelRole,
   AgentModelRoutes,
@@ -33,6 +34,15 @@ export function saveModelConfiguration(
   const provider = values.provider.trim()
   if (!model) return new Error('Model ID is required')
   if (!provider) return new Error('Provider is required')
+
+  const allowedModels = Object.values(MODEL_PRESETS).map(models => models[role])
+  if (!allowedModels.includes(model)) {
+    return new Error(
+      role === 'main'
+        ? 'Unsupported Mainagent model'
+        : 'Unsupported Subagents model',
+    )
+  }
 
   const settings = dependencies.getSettings()
   if (!settings?.providers?.[provider]) {

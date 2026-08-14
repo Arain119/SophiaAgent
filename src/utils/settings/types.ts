@@ -42,15 +42,17 @@ export const ProviderProfileSchema = lazySchema(() =>
     .strict(),
 )
 
-export const AgentModelRouteSchema = lazySchema(() =>
-  z
+const MAIN_MODELS = ['gpt-5.6-sol', 'deepseek-v4-pro'] as const
+const SUBAGENT_MODELS = ['gpt-5.6-luna', 'deepseek-v4-flash'] as const
+
+function agentModelRouteSchema(models: readonly [string, ...string[]]) {
+  return z
     .object({
-      model: z.string().trim().min(1),
+      model: z.enum(models),
       provider: z.string().trim().min(1),
     })
-    .strict(),
-)
-
+    .strict()
+}
 /**
  * Schema for permissions section
  */
@@ -288,8 +290,8 @@ export const SettingsSchema = lazySchema(() =>
         .describe('Named OpenAI Responses endpoint profiles.'),
       agentModels: z
         .object({
-          main: AgentModelRouteSchema(),
-          subagent: AgentModelRouteSchema(),
+          main: agentModelRouteSchema(MAIN_MODELS),
+          subagent: agentModelRouteSchema(SUBAGENT_MODELS),
         })
         .strict()
         .optional()

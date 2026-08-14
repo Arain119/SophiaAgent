@@ -5,6 +5,7 @@ import { MessageResponse } from 'src/components/MessageResponse.js';
 import { Box, Text } from '@anthropic/ink';
 import { getDisplayPath } from 'src/utils/file.js';
 import { extractTag } from 'src/utils/messages.js';
+import { OutputLine } from 'src/components/shell/OutputLine.js';
 import type { Input, Output } from './LSPTool.js';
 import { getSymbolAtPosition } from './symbolContext.js';
 
@@ -175,9 +176,5 @@ export function renderToolResultMessage(
 
   // Fallback for error cases where counts aren't available
   // (e.g., LSP server initialization failures, request errors)
-  return (
-    <MessageResponse>
-      <Text>{output.result}</Text>
-    </MessageResponse>
-  );
+  return <OutputLine content={output.result} verbose={verbose} />;
 }

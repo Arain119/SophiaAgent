@@ -2,12 +2,15 @@ import { Box, Dialog, Text } from '@anthropic/ink';
 import React, { useCallback, useState } from 'react';
 import { saveModelConfiguration } from '../commands/model/configuration.js';
 import { modelConfigurationDependencies } from '../commands/model/runtime.js';
-import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { useSetAppState } from '../state/AppState.js';
-import type { AgentModelRole } from '../utils/providerProfiles.js';
+import {
+  getModelForService,
+  getModelService,
+  type AgentModelRole,
+  type ModelService,
+} from '../utils/providerProfiles.js';
 import { getSettingsForSource } from '../utils/settings/settings.js';
 import { Select } from './CustomSelect/select.js';
-import TextInput from './TextInput.js';
 import { ProviderConfig } from './ProviderConfig.js';
 
 type Props = {
@@ -64,7 +67,7 @@ export function ModelConfig({ onDone }: Props): React.ReactNode {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
           <Text>
-            Main agent <Text color="success">{routes?.main.model ?? 'Not configured'}</Text>
+            Mainagent <Text color="success">{routes?.main.model ?? 'Not configured'}</Text>
             {routes ? <Text dimColor> via {routes.main.provider}</Text> : null}
           </Text>
           <Text>
@@ -74,7 +77,7 @@ export function ModelConfig({ onDone }: Props): React.ReactNode {
         </Box>
         <Select
           options={[
-            { label: 'Edit main agent', value: 'main' },
+            { label: 'Edit Mainagent', value: 'main' },
             { label: 'Edit subagents', value: 'subagent' },
             { label: 'Manage providers', value: 'providers' },
             { label: 'Done', value: 'done' },
@@ -102,53 +105,63 @@ function ModelForm({
   const providers = Object.keys(settings?.providers ?? {});
   const current = settings?.agentModels?.[role];
   const [provider, setProvider] = useState(current?.provider ?? providers[0] ?? '');
-  const [model, setModel] = useState(current?.model ?? '');
-  const [editingModel, setEditingModel] = useState(false);
+  const [step, setStep] = useState<'provider' | 'service'>('provider');
   const [error, setError] = useState<string | null>(null);
-  const [cursorOffset, setCursorOffset] = useState(model.length);
-  const columns = Math.max(20, useTerminalSize().columns - 20);
+  const currentService = getModelService(current?.model ?? '') ?? 'chatgpt';
 
-  const submit = useCallback(() => {
-    const saveError = saveModelConfiguration(role, { model, provider }, modelConfigurationDependencies);
-    if (saveError) {
-      setError(saveError.message);
-      return;
-    }
-    onSaved();
-  }, [model, onSaved, provider, role]);
+  const save = useCallback(
+    (service: ModelService) => {
+      const saveError = saveModelConfiguration(
+        role,
+        { model: getModelForService(service, role), provider },
+        modelConfigurationDependencies,
+      );
+      if (saveError) {
+        setError(saveError.message);
+        return;
+      }
+      onSaved();
+    },
+    [onSaved, provider, role],
+  );
 
   return (
-    <Dialog title={role === 'main' ? 'Main agent model' : 'Subagent model'} color="permission" onCancel={onBack}>
+    <Dialog title={role === 'main' ? 'Mainagent model' : 'Subagents model'} color="permission" onCancel={onBack}>
       <Box flexDirection="column" gap={1}>
-        <Text>Provider</Text>
-        {editingModel ? (
-          <Text color="success">{provider}</Text>
-        ) : (
-          <Select
-            options={providers.map(name => ({ label: name, value: name }))}
-            defaultValue={provider}
-            onChange={value => {
-              setProvider(value);
-              setEditingModel(true);
-              setError(null);
-            }}
-            onCancel={onBack}
-          />
-        )}
-        {editingModel ? (
-          <Box flexDirection="column">
-            <Text>Model ID</Text>
-            <TextInput
-              value={model}
-              onChange={setModel}
-              onSubmit={submit}
-              cursorOffset={cursorOffset}
-              onChangeCursorOffset={setCursorOffset}
-              columns={columns}
-              focus
+        {step === 'provider' ? (
+          <>
+            <Text>Provider</Text>
+            <Select
+              options={providers.map(name => ({ label: name, value: name }))}
+              defaultValue={providers.includes(provider) ? provider : providers[0]}
+              onChange={value => {
+                setProvider(value);
+                setStep('service');
+                setError(null);
+              }}
+              onCancel={onBack}
             />
-          </Box>
-        ) : null}
+          </>
+        ) : (
+          <>
+            <Text>Model</Text>
+            <Select
+              options={[
+                {
+                  label: role === 'main' ? 'ChatGPT  gpt-5.6-sol' : 'ChatGPT  gpt-5.6-luna',
+                  value: 'chatgpt' as const,
+                },
+                {
+                  label: role === 'main' ? 'DeepSeek  deepseek-v4-pro' : 'DeepSeek  deepseek-v4-flash',
+                  value: 'deepseek' as const,
+                },
+              ]}
+              defaultValue={currentService}
+              onChange={save}
+              onCancel={() => setStep('provider')}
+            />
+          </>
+        )}
         {error ? <Text color="error">{error}</Text> : null}
       </Box>
     </Dialog>

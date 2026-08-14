@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { getAllBaseTools } from '../../tools.js'
 import {
+  getSshControlArgs,
   getSshProbeRetryDelayMs,
   isSshFailureSafeToReplay,
   sanitizeSshStderr,
@@ -174,6 +175,18 @@ describe('SSHRemoteTool', () => {
   test('backs off connection probes from two minutes to a one-hour cap', () => {
     expect([1, 2, 3, 4, 5, 6, 7].map(getSshProbeRetryDelayMs)).toEqual([
       120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000, 3_600_000,
+    ])
+  })
+
+  test('disables unsupported OpenSSH control sockets on Windows', () => {
+    expect(getSshControlArgs('C:\\temp\\ssh-control', 'win32')).toEqual([])
+    expect(getSshControlArgs('/tmp/ssh-control', 'linux')).toEqual([
+      '-o',
+      'ControlMaster=auto',
+      '-o',
+      'ControlPersist=300',
+      '-o',
+      'ControlPath=/tmp/ssh-control',
     ])
   })
 

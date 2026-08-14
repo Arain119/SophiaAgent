@@ -3,6 +3,7 @@ import { copyFile, stat as fsStat, truncate as fsTruncate, link } from 'fs/promi
 import * as React from 'react';
 import type { CanUseToolFn } from 'src/hooks/useCanUseTool.js';
 import type { AppState } from 'src/state/AppState.js';
+import { getProjectRoot } from 'src/bootstrap/state.js';
 import { z } from 'zod/v4';
 import { TOOL_SUMMARY_MAX_LENGTH } from 'src/constants/toolLimits.js';
 import {
@@ -22,6 +23,7 @@ import {
 import type { AgentId } from 'src/types/ids.js';
 import type { AssistantMessage } from 'src/types/message.js';
 import { parseForSecurity } from 'src/utils/bash/ast.js';
+import { persistPlannedPythonHeredoc, planPythonHeredocPersistence } from 'src/utils/bash/pythonHeredocPersistence.js';
 import { splitCommand_DEPRECATED, splitCommandWithOperators } from 'src/utils/bash/commands.js';
 import { extractClaudeCodeHints } from 'src/utils/claudeCodeHints.js';
 import { detectCodeIndexingFromCommand } from 'src/utils/codeIndexing.js';
@@ -723,6 +725,14 @@ export const BashTool = buildTool({
     // This ensures what the user previewed is exactly what gets written
     if (input._simulatedSedEdit) {
       return applySedEdit(input._simulatedSedEdit, toolUseContext, parentMessage);
+    }
+
+    // Safety approval is based on the original command. Only a strictly parsed
+    // Python stdin heredoc can be replaced with an equivalent local script.
+    const heredocPlan = planPythonHeredocPersistence(input.command);
+    if (heredocPlan.script) {
+      await persistPlannedPythonHeredoc(getProjectRoot(), heredocPlan);
+      input = { ...input, command: heredocPlan.command };
     }
 
     if (!input.run_in_background) {

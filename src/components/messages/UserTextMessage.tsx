@@ -67,7 +67,7 @@ export function UserTextMessage({
 
   // Show command output
   if (param.text.startsWith('<local-command-stdout') || param.text.startsWith('<local-command-stderr')) {
-    return <UserLocalCommandOutputMessage content={param.text} />;
+    return <UserLocalCommandOutputMessage content={param.text} verbose={verbose} />;
   }
 
   // Handle interruption messages specially

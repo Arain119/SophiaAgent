@@ -11,6 +11,28 @@ export const PROVIDER_MODELS = {
 
 export type ProviderModels = typeof PROVIDER_MODELS
 
+export type ModelService = 'chatgpt' | 'deepseek'
+
+export const MODEL_PRESETS: Record<
+  ModelService,
+  Record<AgentModelRole, string>
+> = {
+  chatgpt: { main: 'gpt-5.6-sol', subagent: 'gpt-5.6-luna' },
+  deepseek: { main: 'deepseek-v4-pro', subagent: 'deepseek-v4-flash' },
+}
+
+export function getModelForService(
+  service: ModelService,
+  role: AgentModelRole,
+): string {
+  return MODEL_PRESETS[service][role]
+}
+
+export function getModelService(model: string): ModelService | undefined {
+  if (Object.values(MODEL_PRESETS.chatgpt).includes(model)) return 'chatgpt'
+  if (Object.values(MODEL_PRESETS.deepseek).includes(model)) return 'deepseek'
+  return undefined
+}
 export type ProviderProfile = {
   protocol: APIProvider
   baseUrl: string

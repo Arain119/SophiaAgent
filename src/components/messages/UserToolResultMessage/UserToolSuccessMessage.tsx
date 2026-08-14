@@ -13,6 +13,8 @@ import {
 import type { buildMessageLookups } from '../../../utils/messages.js';
 import { MessageResponse } from '../../MessageResponse.js';
 import { HookProgressMessage } from '../HookProgressMessage.js';
+import { renderTruncatedContent } from '../../../utils/terminal.js';
+import { useTerminalSize } from '../../../hooks/useTerminalSize.js';
 
 type Props = {
   message: NormalizedUserMessage;
@@ -42,6 +44,7 @@ export function UserToolSuccessMessage({
   shouldCollapseDiffs,
 }: Props): React.ReactNode {
   const [theme] = useTheme();
+  const { columns } = useTerminalSize();
 
   // Capture classifier approval once on mount, then delete from Map to prevent linear growth.
   // useState lazy initializer ensures the value persists across re-renders.
@@ -93,7 +96,12 @@ export function UserToolSuccessMessage({
   // Ink requires text strings to be inside <Text>. Tools that return plain
   // Multi-line strings crash without the wrap.
   // React elements from UI.tsx files pass through unchanged.
-  const wrappedMessage = typeof renderedMessage === 'string' ? <Text>{renderedMessage}</Text> : renderedMessage;
+  const wrappedMessage =
+    typeof renderedMessage === 'string' ? (
+      <Text>{verbose ? renderedMessage : renderTruncatedContent(renderedMessage, columns)}</Text>
+    ) : (
+      renderedMessage
+    );
 
   // Tools that return '' from userFacingName opt out of tool chrome and
   // render like plain assistant text. Skip the tool-result width constraint

@@ -33,7 +33,7 @@ type Props = {
   isActiveGroup?: boolean;
 };
 
-/** Render a single tool use in verbose mode */
+/** Render a single tool use while the latest activity group is expanded. */
 function VerboseToolUse({
   content,
   tools,
@@ -41,6 +41,7 @@ function VerboseToolUse({
   inProgressToolUseIDs,
   shouldAnimate,
   theme,
+  verbose,
 }: {
   content: { type: 'tool_use'; id: string; name: string; input: unknown };
   tools: Tools;
@@ -48,6 +49,7 @@ function VerboseToolUse({
   inProgressToolUseIDs: Set<string>;
   shouldAnimate: boolean;
   theme: ThemeName;
+  verbose: boolean;
 }): React.ReactNode {
   const bg = useSelectedMessageBg();
   // Same REPL-primitive fallback as getSearchExtraToolsOrReadInfo — REPL mode strips
@@ -68,11 +70,11 @@ function VerboseToolUse({
   const parsedInput = tool.inputSchema.safeParse(content.input);
   const input = parsedInput.success ? parsedInput.data : undefined;
   const userFacingName = tool.userFacingName(input);
-  const toolUseMessage = input ? tool.renderToolUseMessage(input, { theme, verbose: true }) : null;
+  const toolUseMessage = input ? tool.renderToolUseMessage(input, { theme, verbose }) : null;
   const renderedToolResult =
     isResolved && !isError && toolResult !== undefined
       ? tool.renderToolResultMessage?.(toolResult as never, [], {
-          verbose: true,
+          verbose,
           tools,
           theme,
         })
@@ -231,6 +233,7 @@ export function CollapsedReadSearchContent({
               inProgressToolUseIDs={inProgressToolUseIDs}
               shouldAnimate={shouldAnimate}
               theme={theme}
+              verbose={verbose}
             />
           );
         })}

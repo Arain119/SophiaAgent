@@ -37,6 +37,12 @@ const MAX_JSON_PARSE_CHARS = 200_000;
 // A string value is "dominant text payload" if it has newlines or is
 // long enough that inline display would be worse than unwrapping.
 const UNWRAP_MIN_STRING_LEN = 200;
+const MAX_COMPACT_CONTENT_BLOCKS = 3;
+
+export function compactVisibleItems<T>(items: T[], verbose: boolean): { visible: T[]; hiddenCount: number } {
+  const visible = verbose ? items : items.slice(0, MAX_COMPACT_CONTENT_BLOCKS);
+  return { visible, hiddenCount: items.length - visible.length };
+}
 
 export function renderToolUseMessage(
   input: z.infer<ReturnType<typeof inputSchema>>,
@@ -130,7 +136,8 @@ export function renderToolResultMessage(
 
   let contentElement: React.ReactNode;
   if (Array.isArray(mcpOutput)) {
-    const contentBlocks = mcpOutput.map((item, i) => {
+    const { visible: visibleOutput, hiddenCount: hiddenBlockCount } = compactVisibleItems(mcpOutput, verbose);
+    const contentBlocks = visibleOutput.map((item, i) => {
       if (item.type === 'image') {
         return (
           <Box key={i} justifyContent="space-between" overflowX="hidden" width="100%">
@@ -156,6 +163,11 @@ export function renderToolResultMessage(
     contentElement = (
       <Box flexDirection="column" width="100%">
         {contentBlocks}
+        {hiddenBlockCount > 0 && (
+          <MessageResponse height={1}>
+            <Text dimColor>... +{hiddenBlockCount} content blocks</Text>
+          </MessageResponse>
+        )}
       </Box>
     );
   } else if (!mcpOutput) {
@@ -211,16 +223,18 @@ function MCPTextOutput({ content, verbose }: { content: string; verbose: boolean
   }
   const flat = tryFlattenJson(content);
   if (flat !== null) {
-    const maxKeyWidth = Math.max(...flat.map(([k]) => stringWidth(k)));
+    const { visible: visibleFlat, hiddenCount: hiddenFieldCount } = compactVisibleItems(flat, verbose);
+    const maxKeyWidth = Math.max(...visibleFlat.map(([k]) => stringWidth(k)));
     return (
       <MessageResponse>
         <Box flexDirection="column">
-          {flat.map(([key, value], i) => (
+          {visibleFlat.map(([key, value], i) => (
             <Text key={i}>
               <Text dimColor>{key.padEnd(maxKeyWidth)}: </Text>
               <Ansi>{linkifyUrlsInText(value)}</Ansi>
             </Text>
           ))}
+          {hiddenFieldCount > 0 && <Text dimColor>... +{hiddenFieldCount} fields</Text>}
         </Box>
       </MessageResponse>
     );

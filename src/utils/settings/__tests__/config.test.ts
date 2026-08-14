@@ -469,21 +469,40 @@ describe('named provider settings', () => {
         },
       },
       agentModels: {
-        main: { model: 'main-model', provider: 'work' },
-        subagent: { model: 'sub-model', provider: 'local' },
+        main: { model: 'gpt-5.6-sol', provider: 'work' },
+        subagent: { model: 'deepseek-v4-flash', provider: 'local' },
       },
     })
     expect(result.success).toBe(true)
   })
 
+  test('rejects custom and role-mismatched model IDs', () => {
+    for (const agentModels of [
+      {
+        main: { model: 'private-model', provider: 'work' },
+        subagent: { model: 'gpt-5.6-luna', provider: 'work' },
+      },
+      {
+        main: { model: 'gpt-5.6-luna', provider: 'work' },
+        subagent: { model: 'gpt-5.6-sol', provider: 'work' },
+      },
+    ]) {
+      expect(
+        SettingsSchema().safeParse({
+          providers: { work: profile },
+          agentModels,
+        }).success,
+      ).toBe(false)
+    }
+  })
   test('rejects removed API protocols', () => {
     const result = SettingsSchema().safeParse({
       providers: {
         legacy: { ...profile, protocol: 'openai-completions' },
       },
       agentModels: {
-        main: { model: 'main-model', provider: 'legacy' },
-        subagent: { model: 'sub-model', provider: 'legacy' },
+        main: { model: 'gpt-5.6-sol', provider: 'legacy' },
+        subagent: { model: 'gpt-5.6-luna', provider: 'legacy' },
       },
     })
     expect(result.success).toBe(false)
@@ -497,8 +516,8 @@ describe('named provider settings', () => {
       SettingsSchema().safeParse({
         providers: { work: profile },
         agentModels: {
-          main: { model: 'main-model', provider: 'missing' },
-          subagent: { model: 'sub-model', provider: 'work' },
+          main: { model: 'gpt-5.6-sol', provider: 'missing' },
+          subagent: { model: 'gpt-5.6-luna', provider: 'work' },
         },
       }).success,
     ).toBe(false)
@@ -518,8 +537,8 @@ describe('named provider settings', () => {
             },
           },
           agentModels: {
-            main: { model: 'main-model', provider: 'work' },
-            subagent: { model: 'sub-model', provider: 'work' },
+            main: { model: 'gpt-5.6-sol', provider: 'work' },
+            subagent: { model: 'gpt-5.6-luna', provider: 'work' },
           },
         }).success,
       ).toBe(false)
@@ -534,8 +553,8 @@ describe('named provider settings', () => {
           },
         },
         agentModels: {
-          main: { model: 'main-model', provider: 'work' },
-          subagent: { model: 'sub-model', provider: 'work' },
+          main: { model: 'gpt-5.6-sol', provider: 'work' },
+          subagent: { model: 'gpt-5.6-luna', provider: 'work' },
         },
       }).success,
     ).toBe(false)

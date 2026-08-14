@@ -18,6 +18,18 @@ import {
 afterEach(resetAgentTerminalArtifactsForTest)
 
 describe('agentTerminalArtifacts', () => {
+  test('recognizes Chinese terminal-memory headings', () => {
+    const memory = buildAgentTerminalMemory(
+      '# 结果\n已修复连接。\n# 决策\n- 使用密钥\n# 证据\n- 日志正常\n# 验证\n- 测试通过\n# 剩余工作\n- 轮换旧密码',
+    )
+    expect(memory).toEqual({
+      outcome: '已修复连接。',
+      decisions: ['使用密钥'],
+      evidence: ['日志正常'],
+      verification: ['测试通过'],
+      remainingWork: ['轮换旧密码'],
+    })
+  })
   test('extracts structured terminal sections', () => {
     const memory = buildAgentTerminalMemory(`# Outcome
 Implemented routing.

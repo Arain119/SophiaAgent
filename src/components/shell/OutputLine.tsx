@@ -8,7 +8,6 @@ import { jsonParse, jsonStringify } from '../../utils/slowOperations.js';
 import { renderTruncatedContent } from '../../utils/terminal.js';
 import { MessageResponse } from '../MessageResponse.js';
 import { InVirtualListContext } from '../messageActions.js';
-import { useExpandShellOutput } from './ExpandShellOutputContext.js';
 
 export function tryFormatJson(line: string): string {
   try {
@@ -65,23 +64,18 @@ export function OutputLine({
   linkifyUrls?: boolean;
 }): React.ReactNode {
   const { columns } = useTerminalSize();
-  // Context-based expansion for latest user shell output (from ! commands)
-  const expandShellOutput = useExpandShellOutput();
   const inVirtualList = React.useContext(InVirtualListContext);
-
-  // Show full output if verbose mode OR if this is the latest user shell output
-  const shouldShowFull = verbose || expandShellOutput;
 
   const formattedContent = useMemo(() => {
     let formatted = tryJsonFormatContent(content);
     if (linkifyUrls) {
       formatted = linkifyUrlsInText(formatted);
     }
-    if (shouldShowFull) {
+    if (verbose) {
       return stripUnderlineAnsi(formatted);
     }
     return stripUnderlineAnsi(renderTruncatedContent(formatted, columns, inVirtualList));
-  }, [content, shouldShowFull, columns, linkifyUrls, inVirtualList]);
+  }, [content, verbose, columns, linkifyUrls, inVirtualList]);
 
   const color = isError ? 'error' : isWarning ? 'warning' : undefined;
 

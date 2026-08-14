@@ -59,21 +59,17 @@ import { getInitialSettings } from '../../../utils/settings/settings.js'
 import { getProviderApiKey } from '../../../utils/providerCredentials.js'
 import { getConfiguredProviderNameForModel } from '../../../utils/model/providers.js'
 import type { ResponsesProviderEndpoint } from './responsesAdapter.js'
+import { getSelectedResponsesProvider } from './providerRouting.js'
 
 function getResponsesProviders(
   preferredProvider: string,
 ): ResponsesProviderEndpoint[] {
   const settings = getInitialSettings()
-  const providers = settings.providers ?? {}
-  if (!providers[preferredProvider]) return []
-  return [
+  return getSelectedResponsesProvider(
+    settings.providers ?? {},
     preferredProvider,
-    ...Object.keys(providers).filter(name => name !== preferredProvider),
-  ].map(name => ({
-    name,
-    baseUrl: providers[name]!.baseUrl,
-    apiKey: getProviderApiKey(name),
-  }))
+    getProviderApiKey,
+  )
 }
 function convertToResponsesReasoningEffort(
   effortValue: unknown,

@@ -40,7 +40,6 @@ import { UserImageMessage } from './messages/UserImageMessage.js';
 import { UserTextMessage } from './messages/UserTextMessage.js';
 import { UserToolResultMessage } from './messages/UserToolResultMessage/UserToolResultMessage.js';
 import { OffscreenFreeze } from './OffscreenFreeze.js';
-import { ExpandShellOutputProvider } from './shell/ExpandShellOutputContext.js';
 
 export type Props = {
   message:
@@ -70,8 +69,6 @@ export type Props = {
   isUserContinuation?: boolean;
   /** ID of the last thinking block (uuid:index) to show, used for hiding past thinking in transcript mode */
   lastThinkingBlockId?: string | null;
-  /** UUID of the latest user bash output message (for auto-expanding) */
-  latestBashOutputUUID?: string | null;
   /** Whether to collapse diff display for this message */
   shouldCollapseDiffs?: boolean;
 };
@@ -94,7 +91,6 @@ function MessageImpl({
   isActiveCollapsedGroup,
   isUserContinuation = false,
   lastThinkingBlockId,
-  latestBashOutputUUID,
   shouldCollapseDiffs,
 }: Props): React.ReactNode {
   switch (message.type) {
@@ -153,10 +149,7 @@ function MessageImpl({
           imageIndices.push(imagePosition);
         }
       }
-      // Check if this message is the latest bash output - if so, wrap content
-      // with provider so OutputLine can show full output via context
-      const isLatestBashOutput = latestBashOutputUUID === message.uuid;
-      const content = (
+      return (
         <Box flexDirection="column" width={containerWidth ?? '100%'}>
           {(
             message.message.content as Array<
@@ -181,7 +174,6 @@ function MessageImpl({
           ))}
         </Box>
       );
-      return isLatestBashOutput ? <ExpandShellOutputProvider>{content}</ExpandShellOutputProvider> : content;
     }
     case 'system':
       if (message.subtype === 'compact_boundary') {
@@ -482,11 +474,6 @@ export function areMessagePropsEqual(prev: Props, next: Props): boolean {
   }
   // Verbose toggle changes thinking block visibility/expansion
   if (prev.verbose !== next.verbose) return false;
-  // Only re-render if this message's "is latest bash output" status changed,
-  // not when the global latestBashOutputUUID changes to a different message
-  const prevIsLatest = prev.latestBashOutputUUID === prev.message.uuid;
-  const nextIsLatest = next.latestBashOutputUUID === next.message.uuid;
-  if (prevIsLatest !== nextIsLatest) return false;
   if (prev.isTranscriptMode !== next.isTranscriptMode) return false;
   // containerWidth is an absolute number in the no-metadata path (wrapper
   // Box is skipped). Static messages must re-render on terminal resize.

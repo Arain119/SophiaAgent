@@ -39,6 +39,7 @@ import type { QueryGuard } from './QueryGuard.js'
 import { queryCheckpoint, startQueryProfile } from './queryProfiler.js'
 import { runWithWorkload } from './workloadContext.js'
 import { markTaskResultConsumed } from './task/taskResultConsumption.js'
+import { extractSshCredentialForModel } from './transcriptSecretRedaction.js'
 
 function exit(): void {
   gracefulShutdownSync(0)
@@ -206,7 +207,11 @@ export async function handlePromptSubmit(
   // Parse references and replace with actual content early, before queueing
   // or immediate-command dispatch, so queued commands and immediate commands
   // both receive the expanded text from when it was submitted.
-  const finalInput = expandPastedTextRefs(input, pastedContents)
+  const expandedInput = expandPastedTextRefs(input, pastedContents)
+  const finalInput =
+    mode === 'prompt'
+      ? extractSshCredentialForModel(expandedInput)
+      : expandedInput
   const pastedTextRefs = parseReferences(input).filter(
     r => pastedContents[r.id]?.type === 'text',
   )

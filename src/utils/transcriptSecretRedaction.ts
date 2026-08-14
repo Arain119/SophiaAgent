@@ -1,6 +1,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { Message } from '../types/message.js'
 import { setSshPassword } from './sshCredentials.js'
+import { repairMojibake } from './textEncoding.js'
 
 type CredentialWriter = (
   host: string,
@@ -40,14 +41,32 @@ export function captureSshCredential(
   writeCredential(host, port, password)
 }
 
+/** Store an SSH password locally and return text safe to send to the model. */
+export function extractSshCredentialForModel(
+  value: string,
+  writeCredential: CredentialWriter = setSshPassword,
+): string {
+  const repaired = repairMojibake(value)
+  const match = repaired.match(SSH_WITH_PASSWORD)
+  if (!match) return repaired
+  const port = match[1] ? Number(match[1]) : 22
+  const host = match[2]
+  const password = match[3]
+  if (!host || !password || !Number.isInteger(port)) return repaired
+  const result = writeCredential(host, port, password)
+  if (result instanceof Error) return repaired
+  return redactSecretText(repaired)
+}
+
 function redactContentBlocks(
   content: ContentBlockParam[],
   writeCredential: CredentialWriter,
 ): ContentBlockParam[] {
   return content.map(block => {
     if (block.type === 'text') {
-      captureSshCredential(block.text, writeCredential)
-      return { ...block, text: redactSecretText(block.text) }
+      const text = repairMojibake(block.text)
+      captureSshCredential(text, writeCredential)
+      return { ...block, text: redactSecretText(text) }
     }
     if (block.type === 'tool_use' && block.name === 'SSHRemote') {
       const input = block.input as Record<string, unknown>
@@ -75,10 +94,11 @@ export function redactTranscriptSecrets(
     if (message.type !== 'user' && message.type !== 'assistant') return message
     const content = message.message?.content
     if (typeof content === 'string') {
-      captureSshCredential(content, writeCredential)
+      const repaired = repairMojibake(content)
+      captureSshCredential(repaired, writeCredential)
       return {
         ...message,
-        message: { ...message.message, content: redactSecretText(content) },
+        message: { ...message.message, content: redactSecretText(repaired) },
       } as Message
     }
     if (!Array.isArray(content)) return message

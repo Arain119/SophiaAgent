@@ -2,11 +2,17 @@
  * EXPERIMENT: Session memory compaction
  */
 
-import type { AgentId } from '../../types/ids.js'
 import type { HookResultMessage, Message } from '../../types/message.js'
+import type { ToolUseContext } from '../../Tool.js'
+import {
+  createAttachmentMessage,
+  getAgentListingDeltaAttachment,
+  getMcpInstructionsDeltaAttachment,
+} from '../../utils/attachments.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { errorMessage } from '../../utils/errors.js'
+import { cacheToObject } from '../../utils/fileStateCache.js'
 import {
   createCompactBoundaryMessage,
   createUserMessage,
@@ -16,6 +22,7 @@ import { getMainLoopModel } from '../../utils/model/model.js'
 import { getSessionMemoryPath } from '../../utils/safety/filesystem.js'
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
 import { getTranscriptPath } from '../../utils/sessionStorage.js'
+import { getSshCompactContext } from '../../utils/sshConnectionContinuity.js'
 import { tokenCountFromLastAPIResponse } from '../../utils/tokens.js'
 import {
   getDynamicConfig_BLOCKS_ON_INIT,
@@ -35,7 +42,12 @@ import {
   annotateBoundaryWithPreservedSegment,
   buildPostCompactMessages,
   type CompactionResult,
+  createAsyncAgentAttachmentsIfNeeded,
+  createPlanModeAttachmentIfNeeded,
   createPlanAttachmentIfNeeded,
+  createPostCompactFileAttachments,
+  createSkillAttachmentIfNeeded,
+  POST_COMPACT_MAX_FILES_TO_RESTORE,
 } from './compact.js'
 import { estimateMessageTokens } from './microCompact.js'
 import { getCompactUserSummaryMessage } from './prompt.js'
@@ -435,14 +447,18 @@ export function shouldUseSessionMemoryCompaction(): boolean {
 /**
  * Create a CompactionResult from session memory
  */
-function createCompactionResultFromSessionMemory(
+async function createCompactionResultFromSessionMemory(
   messages: Message[],
   sessionMemory: string,
   messagesToKeep: Message[],
   hookResults: HookResultMessage[],
   transcriptPath: string,
-  agentId?: AgentId,
-): CompactionResult {
+  context: ToolUseContext,
+  preCompactReadFileState: Record<
+    string,
+    { content: string; timestamp: number }
+  >,
+): Promise<CompactionResult> {
   const preCompactTokenCount = tokenCountFromLastAPIResponse(messages)
 
   const boundaryMarker = createCompactBoundaryMessage(
@@ -466,6 +482,8 @@ function createCompactionResultFromSessionMemory(
     const memoryPath = getSessionMemoryPath()
     summaryContent += `\n\nSome session memory sections were truncated for length. The full session memory can be viewed at: ${memoryPath}`
   }
+  const sshContext = await getSshCompactContext()
+  if (sshContext) summaryContent += `\n\n${sshContext}`
 
   const summaryMessages = [
     createUserMessage({
@@ -475,8 +493,40 @@ function createCompactionResultFromSessionMemory(
     }),
   ]
 
-  const planAttachment = createPlanAttachmentIfNeeded(agentId)
-  const attachments = planAttachment ? [planAttachment] : []
+  const [fileAttachments, taskAttachments] = await Promise.all([
+    createPostCompactFileAttachments(
+      preCompactReadFileState,
+      context,
+      POST_COMPACT_MAX_FILES_TO_RESTORE,
+      messagesToKeep,
+    ),
+    createAsyncAgentAttachmentsIfNeeded(context),
+  ])
+  const attachments = [...fileAttachments, ...taskAttachments]
+
+  const planAttachment = createPlanAttachmentIfNeeded(context.agentId)
+  if (planAttachment) attachments.push(planAttachment)
+
+  const planModeAttachment = await createPlanModeAttachmentIfNeeded(context)
+  if (planModeAttachment) attachments.push(planModeAttachment)
+
+  const skillAttachment = createSkillAttachmentIfNeeded(context.agentId)
+  if (skillAttachment) attachments.push(skillAttachment)
+
+  for (const attachment of getAgentListingDeltaAttachment(
+    context,
+    messagesToKeep,
+  )) {
+    attachments.push(createAttachmentMessage(attachment))
+  }
+  for (const attachment of getMcpInstructionsDeltaAttachment(
+    context.options.mcpClients,
+    context.options.tools,
+    context.options.mainLoopModel,
+    messagesToKeep,
+  )) {
+    attachments.push(createAttachmentMessage(attachment))
+  }
 
   return {
     boundaryMarker: annotateBoundaryWithPreservedSegment(
@@ -507,7 +557,7 @@ function createCompactionResultFromSessionMemory(
  */
 export async function trySessionMemoryCompaction(
   messages: Message[],
-  agentId?: AgentId,
+  toolUseContext: ToolUseContext,
   autoCompactThreshold?: number,
 ): Promise<CompactionResult | null> {
   if (!shouldUseSessionMemoryCompaction()) {
@@ -581,14 +631,16 @@ export async function trySessionMemoryCompaction(
 
     // Get transcript path for the summary message
     const transcriptPath = getTranscriptPath()
+    const preCompactReadFileState = cacheToObject(toolUseContext.readFileState)
 
-    const compactionResult = createCompactionResultFromSessionMemory(
+    const compactionResult = await createCompactionResultFromSessionMemory(
       messages,
       sessionMemory,
       messagesToKeep,
       hookResults,
       transcriptPath,
-      agentId,
+      toolUseContext,
+      preCompactReadFileState,
     )
 
     const postCompactMessages = buildPostCompactMessages(compactionResult)
@@ -606,6 +658,9 @@ export async function trySessionMemoryCompaction(
       })
       return null
     }
+
+    toolUseContext.readFileState.clear()
+    toolUseContext.loadedNestedMemoryPaths?.clear()
 
     return {
       ...compactionResult,

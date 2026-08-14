@@ -28,6 +28,8 @@ import { TASK_OUTPUT_TOOL_NAME } from './constants.js';
 
 const DEFAULT_RUNNING_MAX_CHARS = 4_000;
 const DEFAULT_COMPLETED_MAX_CHARS = 20_000;
+export const MAX_INTERACTIVE_WAIT_MS = 30_000;
+const activeTaskWaits = new Map<string, Promise<TaskState | null>>();
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
@@ -156,12 +158,55 @@ export function getTaskWaitPollDelay(elapsedMs: number): number {
   return 1_000;
 }
 
+export function resolveInteractiveWaitTimeout(timeoutMs: number): number {
+  return Math.min(timeoutMs, MAX_INTERACTIVE_WAIT_MS);
+}
+
+function raceTaskWaitWithAbort(
+  wait: Promise<TaskState | null>,
+  abortController?: AbortController,
+): Promise<TaskState | null> {
+  if (!abortController) return wait;
+  if (abortController.signal.aborted) return Promise.reject(new AbortError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new AbortError());
+    abortController.signal.addEventListener('abort', onAbort, { once: true });
+    wait.then(
+      value => {
+        abortController.signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      error => {
+        abortController.signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 // Wait for task to complete
 export async function waitForTaskCompletion(
   taskId: string,
   getAppState: () => { tasks?: Record<string, TaskState> },
   timeoutMs: number,
   abortController?: AbortController,
+  subscribeAppState?: (listener: () => void) => () => void,
+): Promise<TaskState | null> {
+  const existing = activeTaskWaits.get(taskId);
+  if (existing) return raceTaskWaitWithAbort(existing, abortController);
+
+  const wait = waitForTaskCompletionUnshared(taskId, getAppState, timeoutMs, subscribeAppState);
+  activeTaskWaits.set(taskId, wait);
+  void wait.finally(() => {
+    if (activeTaskWaits.get(taskId) === wait) activeTaskWaits.delete(taskId);
+  });
+  return raceTaskWaitWithAbort(wait, abortController);
+}
+
+async function waitForTaskCompletionUnshared(
+  taskId: string,
+  getAppState: () => { tasks?: Record<string, TaskState> },
+  timeoutMs: number,
   subscribeAppState?: (listener: () => void) => () => void,
 ): Promise<TaskState | null> {
   const startTime = Date.now();
@@ -181,32 +226,15 @@ export async function waitForTaskCompletion(
         settled = true;
         if (timeout) clearTimeout(timeout);
         unsubscribe();
-        abortController?.signal.removeEventListener('abort', onAbort);
         resolve(task);
       };
-      const onAbort = () => {
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        unsubscribe();
-        reject(new AbortError());
-      };
       unsubscribe = subscribeAppState(finish);
-      if (abortController?.signal.aborted) {
-        onAbort();
-      } else {
-        abortController?.signal.addEventListener('abort', onAbort, { once: true });
-        timeout = setTimeout(finish, timeoutMs);
-      }
+      timeout = setTimeout(finish, timeoutMs);
       finish();
     });
   }
 
   while (Date.now() - startTime < timeoutMs) {
-    // Check abort signal
-    if (abortController?.signal.aborted) {
-      throw new AbortError();
-    }
-
     const state = getAppState();
     const task = state.tasks?.[taskId] as TaskState | undefined;
 
@@ -266,10 +294,10 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
 - For completed agent tasks, use section to retrieve a named heading or query to retrieve matching lines with context
 - section takes precedence when it matches; query is used otherwise
 - Use max_chars to bound the returned context
-- Use block=true (default) to wait for task completion
+- Use block=true (default) for one short event-driven wait (at most 30 seconds)
 - Use block=false for non-blocking check of current status
-- Prefer one blocking wait over repeated polling; the task footer already shows live background status
-- Only poll again when new information can change your next action; do not poll the same task on a tight loop
+- After a wait times out, continue independent work and rely on the task-completion notification; do not poll
+- Use a non-blocking check only when current status changes your next action
 - Task IDs can be found using the /tasks command
 - Read the result file directly only when full raw access is needed`;
   },
@@ -342,7 +370,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     const completedTask = await waitForTaskCompletion(
       task_id,
       toolUseContext.getAppState,
-      timeout,
+      resolveInteractiveWaitTimeout(timeout),
       toolUseContext.abortController,
       toolUseContext.subscribeAppState,
     );

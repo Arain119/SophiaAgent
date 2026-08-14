@@ -15,8 +15,8 @@ describe('saveModelConfiguration', () => {
     let settings: SavedModelSettings = {
       providers: { work: profile, backup: profile },
       agentModels: {
-        main: { model: 'main-model', provider: 'work' },
-        subagent: { model: 'sub-model', provider: 'work' },
+        main: { model: 'gpt-5.6-sol', provider: 'work' },
+        subagent: { model: 'gpt-5.6-luna', provider: 'work' },
       },
     }
     let environmentRoute: { model: string; provider: string } | undefined
@@ -34,24 +34,27 @@ describe('saveModelConfiguration', () => {
     expect(
       saveModelConfiguration(
         'main',
-        { model: 'new-main', provider: 'backup' },
+        { model: 'deepseek-v4-pro', provider: 'backup' },
         dependencies,
       ),
     ).toBeNull()
     expect(settings.agentModels?.main).toEqual({
-      model: 'new-main',
+      model: 'deepseek-v4-pro',
       provider: 'backup',
     })
-    expect(settings.agentModels?.subagent.model).toBe('sub-model')
-    expect(environmentRoute).toEqual({ model: 'new-main', provider: 'backup' })
+    expect(settings.agentModels?.subagent.model).toBe('gpt-5.6-luna')
+    expect(environmentRoute).toEqual({
+      model: 'deepseek-v4-pro',
+      provider: 'backup',
+    })
   })
 
   test('rejects empty models and unknown providers', () => {
     const settings: SavedModelSettings = {
       providers: { work: profile },
       agentModels: {
-        main: { model: 'main-model', provider: 'work' },
-        subagent: { model: 'sub-model', provider: 'work' },
+        main: { model: 'gpt-5.6-sol', provider: 'work' },
+        subagent: { model: 'gpt-5.6-luna', provider: 'work' },
       },
     }
     const dependencies = {
@@ -69,8 +72,15 @@ describe('saveModelConfiguration', () => {
     ).toBe('Model ID is required')
     expect(
       saveModelConfiguration(
+        'main',
+        { model: 'private-model', provider: 'work' },
+        dependencies,
+      )?.message,
+    ).toBe('Unsupported Mainagent model')
+    expect(
+      saveModelConfiguration(
         'subagent',
-        { model: 'model', provider: 'missing' },
+        { model: 'deepseek-v4-flash', provider: 'missing' },
         dependencies,
       )?.message,
     ).toContain("Provider 'missing' does not exist")

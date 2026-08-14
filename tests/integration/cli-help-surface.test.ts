@@ -116,9 +116,10 @@ describe('CLI help surface', () => {
     expect(mainSource).not.toContain(".command('auth')")
     expect(mainSource).not.toContain('cli/handlers/auth')
   })
-
-  test('keeps only the OpenAI Responses wire protocol', () => {
-    expect(providerSource).toContain('OpenAI Responses')
+  test('keeps provider management concise and protocol-neutral', () => {
+    expect(providerSource).toContain('Providers')
+    expect(providerSource).toContain('Provider details')
+    expect(providerSource).toContain('Add provider')
     expect(providerSource).not.toMatch(/anthropic-messages|openai-completions/)
     expect(providerSource).not.toMatch(/Gemini|ChatGPT|OAuth/)
   })
