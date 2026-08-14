@@ -329,20 +329,28 @@ export function useVirtualScroll(
     for (const [key, el] of itemRefs.current) {
       const top = el.yogaNode?.getComputedTop()
       if (top == null) continue
-      if (top >= scrollTop && (!candidate || top < candidate.top)) candidate = { key, top }
+      if (top >= scrollTop && (!candidate || top < candidate.top))
+        candidate = { key, top }
     }
     if (!candidate) {
       for (const [key, el] of itemRefs.current) {
         const top = el.yogaNode?.getComputedTop()
         if (top == null) continue
-        if (!candidate || Math.abs(top - scrollTop) < Math.abs(candidate.top - scrollTop)) {
+        if (
+          !candidate ||
+          Math.abs(top - scrollTop) < Math.abs(candidate.top - scrollTop)
+        ) {
           candidate = { key, top }
         }
       }
     }
     // ScrollBox applies `scrollTop = elementTop + offset`; negate the
     // element's current viewport-relative position to preserve that position.
-    if (candidate) anchorRequestRef.current = { key: candidate.key, offset: scrollTop - candidate.top }
+    if (candidate)
+      anchorRequestRef.current = {
+        key: candidate.key,
+        offset: scrollTop - candidate.top,
+      }
   }
   previousItemCountRef.current = itemKeys.length
   previousOffsetVersionRef.current = offsetVersionRef.current
