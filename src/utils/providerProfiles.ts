@@ -93,6 +93,13 @@ export function providerProfileToEnvironment(
   apiKey?: string,
   model?: string,
 ): Record<string, string | undefined> {
+  if (profile.protocol === 'anthropic-messages') {
+    return {
+      ANTHROPIC_BASE_URL: profile.baseUrl,
+      ANTHROPIC_API_KEY: apiKey || undefined,
+      ANTHROPIC_MODEL: model,
+    }
+  }
   return {
     OPENAI_BASE_URL: profile.baseUrl,
     OPENAI_API_KEY: apiKey || undefined,

@@ -42,6 +42,7 @@ import {
 } from '../../utils/messages.js'
 import { projectCompletedWorkNodes } from '../../tasks/workNodes.js'
 import { getSmallFastModel } from '../../utils/model/model.js'
+import { getAPIProviderForModel } from '../../utils/model/providers.js'
 import { queryCheckpoint } from '../../utils/queryProfiler.js'
 import {
   asSystemPrompt,
@@ -180,6 +181,15 @@ async function* queryModel(
   normalized = stripAdvisorBlocks(normalized)
   normalized = stripExcessMediaItems(normalized, API_MAX_MEDIA_PER_REQUEST)
   queryCheckpoint('query_message_normalization_end')
+
+  if (
+    getAPIProviderForModel(options.model, options.providerName) ===
+    'anthropic-messages'
+  ) {
+    const { queryModelAnthropic } = await import('./anthropic/index.js')
+    yield* queryModelAnthropic(normalized, systemPrompt, tools, signal, options)
+    return
+  }
 
   const { queryModelOpenAI } = await import('./openai/index.js')
   yield* queryModelOpenAI(normalized, systemPrompt, tools, signal, options)

@@ -476,11 +476,11 @@ describe('named provider settings', () => {
     expect(result.success).toBe(true)
   })
 
-  test('rejects custom and role-mismatched model IDs', () => {
+  test('accepts custom model IDs beyond the preset enum', () => {
     for (const agentModels of [
       {
-        main: { model: 'private-model', provider: 'work' },
-        subagent: { model: 'gpt-5.6-luna', provider: 'work' },
+        main: { model: 'claude-opus-5-5', provider: 'work' },
+        subagent: { model: 'z-ai/glm-5.3-flash', provider: 'work' },
       },
       {
         main: { model: 'gpt-5.6-luna', provider: 'work' },
@@ -492,7 +492,7 @@ describe('named provider settings', () => {
           providers: { work: profile },
           agentModels,
         }).success,
-      ).toBe(false)
+      ).toBe(true)
     }
   })
   test('rejects removed API protocols', () => {

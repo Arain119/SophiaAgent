@@ -1,6 +1,8 @@
-import type Anthropic from '@anthropic-ai/sdk'
+import Anthropic from '@anthropic-ai/sdk'
 import type {
+  BetaMessageParam,
   BetaRawMessageStreamEvent,
+  BetaTextBlockParam,
   BetaToolUnion,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import {
@@ -24,6 +26,12 @@ import {
   anthropicToolChoiceToOpenAI,
 } from '@ant/model-provider'
 import { normalizeModelStringForAPI } from './model/model.js'
+import { getAPIProviderForModel } from './model/providers.js'
+import {
+  anthropicClientForEndpoint,
+  isStandardAnthropicTool,
+  resolveAnthropicProviderEndpoint,
+} from '../services/api/anthropic/index.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -141,7 +149,69 @@ function messageParamsToOpenAIRoleContent(
  * await sideQuery({ querySource: 'model_validation', model, max_tokens: 1, messages: [{ role: 'user', content: 'Hi' }] })
  */
 export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
+  if (getAPIProviderForModel(opts.model, undefined) === 'anthropic-messages') {
+    return sideQueryViaAnthropicMessages(opts)
+  }
   return sideQueryViaResponsesCompatible(opts)
+}
+
+/**
+ * Native Anthropic Messages side query: internal params are already
+ * Anthropic-shaped, so a single non-streaming SDK call returns BetaMessage.
+ */
+async function sideQueryViaAnthropicMessages(
+  opts: SideQueryOptions,
+): Promise<BetaMessage> {
+  const start = Date.now()
+  const model = normalizeModelStringForAPI(opts.model)
+  const endpoint = resolveAnthropicProviderEndpoint(undefined, model)
+  const client = anthropicClientForEndpoint(endpoint)
+
+  const system =
+    opts.system === undefined
+      ? undefined
+      : typeof opts.system === 'string'
+        ? [{ type: 'text' as const, text: opts.system }]
+        : opts.system
+
+  const tools = (opts.tools as BetaToolUnion[] | undefined)?.filter(
+    isStandardAnthropicTool,
+  )
+  const betaMessage = (await client.beta.messages.create(
+    {
+      model,
+      messages: opts.messages as unknown as BetaMessageParam[],
+      ...(system ? { system: system as BetaTextBlockParam[] } : {}),
+      ...(tools?.length ? { tools } : {}),
+      ...(opts.tool_choice ? { tool_choice: opts.tool_choice } : {}),
+      max_tokens: opts.max_tokens ?? 1024,
+      output_config: {
+        effort: 'medium',
+        ...(opts.output_format ? { format: opts.output_format } : {}),
+      },
+    } as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
+    opts.signal ? { signal: opts.signal } : undefined,
+  )) as BetaMessage
+
+  const now = Date.now()
+  const lastCompletion = getLastApiCompletionTimestamp()
+  logEvent('tengu_api_success', {
+    requestId:
+      betaMessage.id as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    querySource:
+      opts.querySource as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    model: model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    inputTokens: betaMessage.usage.input_tokens,
+    outputTokens: betaMessage.usage.output_tokens,
+    cachedInputTokens: betaMessage.usage.cache_read_input_tokens ?? 0,
+    uncachedInputTokens: betaMessage.usage.input_tokens,
+    durationMsIncludingRetries: now - start,
+    timeSinceLastApiCallMs:
+      lastCompletion !== null ? now - lastCompletion : undefined,
+  })
+  setLastApiCompletionTimestamp(now)
+
+  return betaMessage
 }
 
 /**
