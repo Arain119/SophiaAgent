@@ -116,7 +116,8 @@ function toAnthropicSystemBlocks(
   )
   if (enableCache) {
     const last = blocks[blocks.length - 1]
-    if (last) last.cache_control = { type: 'ephemeral' }
+    // 1h TTL so the prefix survives a ≤1h sleep cycle.
+    if (last) last.cache_control = { type: 'ephemeral', ttl: '1h' }
   }
   return blocks
 }
@@ -171,6 +172,7 @@ export function buildAnthropicRequestParams(params: {
     ...(params.outputFormat ? { format: params.outputFormat } : {}),
   }
   return {
+    betas: ['extended-cache-ttl-2025-04-11'],
     model: params.model,
     messages: params.messages,
     ...(params.system ? { system: params.system } : {}),
@@ -220,12 +222,28 @@ export async function* queryModelAnthropic(
       const lastTool = standardTools[
         standardTools.length - 1
       ] as unknown as Record<string, unknown>
-      lastTool.cache_control = { type: 'ephemeral' }
+      lastTool.cache_control = { type: 'ephemeral', ttl: '1h' }
     }
 
     const apiMessages = messagesForAPI
       .filter(isAnthropicConvertibleMessage)
       .map(toAnthropicMessageParam)
+
+    // Breakpoint on the last block of the last message: the whole
+    // conversation prefix becomes cache-readable for 1h, so a resumed
+    // (-c) wake within the sleep window hits a warm cache.
+    if (options.enablePromptCaching !== false && apiMessages.length > 0) {
+      const lastMsg = apiMessages[apiMessages.length - 1]
+      const content = lastMsg?.content
+      if (Array.isArray(content) && content.length > 0) {
+        const lastBlock = content[content.length - 1] as {
+          cache_control?: unknown
+        }
+        if (lastBlock && typeof lastBlock === 'object') {
+          lastBlock.cache_control = { type: 'ephemeral', ttl: '1h' }
+        }
+      }
+    }
 
     const { upperLimit } = getModelMaxOutputTokens(model)
     const maxTokens = resolveOpenAIMaxTokens(
