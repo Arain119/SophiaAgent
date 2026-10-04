@@ -226,15 +226,8 @@ export async function* queryModelOpenAI(
       agentId: options.agentId,
       maxTokens,
       recordUsage: u => {
-        const costUSD = calculateUSDCost(
-          openaiModel,
-          u as unknown as BetaUsage,
-        )
-        addToTotalSessionCost(
-          costUSD,
-          u as unknown as BetaUsage,
-          options.model,
-        )
+        const costUSD = calculateUSDCost(openaiModel, u as unknown as BetaUsage)
+        addToTotalSessionCost(costUSD, u as unknown as BetaUsage, options.model)
       },
       onStreamEnd: ({ collectedMessages: cm, usage, ttftMs, start }) => {
         // Record LLM observation in Langfuse (no-op if not configured)
@@ -251,7 +244,8 @@ export async function* queryModelOpenAI(
           },
           startTime: new Date(start),
           endTime: new Date(),
-          completionStartTime: ttftMs > 0 ? new Date(start + ttftMs) : undefined,
+          completionStartTime:
+            ttftMs > 0 ? new Date(start + ttftMs) : undefined,
           tools: convertToolsToLangfuse(toolSchemas as unknown[]),
           ...(enableThinking && { thinking: { type: 'enabled' } }),
         })

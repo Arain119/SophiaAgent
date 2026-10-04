@@ -64,9 +64,7 @@ export function getAPIProviderForModel(
       ? requestedProvider
       : (getConfiguredProviderNameForModel(model, settings) ??
         requestedProvider)
-  return (
-    (name ? providers[name]?.protocol : undefined) ?? 'openai-responses'
-  )
+  return (name ? providers[name]?.protocol : undefined) ?? 'openai-responses'
 }
 
 export function getAPIProvider(

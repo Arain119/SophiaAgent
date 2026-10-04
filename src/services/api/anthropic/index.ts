@@ -129,7 +129,9 @@ export function isStandardAnthropicTool(t: unknown): t is BetaToolUnion {
 
 type AnthropicEffort = 'low' | 'medium' | 'high' | 'max'
 
-function toAnthropicEffort(effortValue: EffortValue | undefined): AnthropicEffort {
+function toAnthropicEffort(
+  effortValue: EffortValue | undefined,
+): AnthropicEffort {
   const v = process.env.SOPHIA_EFFORT_LEVEL?.toLowerCase() ?? effortValue
   if (typeof v === 'number') return 'high'
   if (v === 'low' || v === 'medium' || v === 'high' || v === 'max') return v
@@ -215,10 +217,9 @@ export async function* queryModelAnthropic(
     )
     const standardTools = toolSchemas.filter(isStandardAnthropicTool)
     if (options.enablePromptCaching !== false && standardTools.length > 0) {
-      const lastTool = standardTools[standardTools.length - 1] as unknown as Record<
-        string,
-        unknown
-      >
+      const lastTool = standardTools[
+        standardTools.length - 1
+      ] as unknown as Record<string, unknown>
       lastTool.cache_control = { type: 'ephemeral' }
     }
 
