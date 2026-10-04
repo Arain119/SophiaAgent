@@ -7,8 +7,8 @@ import {
   getProviderProfileForRole,
 } from '../providerProfiles.js'
 
-/** The only supported wire format for configured providers. */
-export type APIProvider = 'openai-responses'
+/** Wire formats a configured provider may speak. */
+export type APIProvider = 'openai-responses' | 'anthropic-messages'
 
 export function getConfiguredProviderName(
   role: AgentModelRole = 'main',
@@ -42,6 +42,29 @@ export function getConfiguredAPIProvider(
   > = getInitialSettings(),
 ): APIProvider | undefined {
   return getProviderProfileForRole(settings, 'main')?.protocol
+}
+
+/**
+ * Resolve the wire protocol a given model's provider speaks. Prefers an
+ * explicitly requested provider name when it exists in settings, else the
+ * provider configured for that model's role (matching
+ * getConfiguredProviderNameForModel).
+ */
+export function getAPIProviderForModel(
+  model: string,
+  requestedProvider: string | undefined,
+  settings: Pick<
+    SettingsJson,
+    'providers' | 'agentModels'
+  > = getInitialSettings(),
+): APIProvider {
+  const providers = settings.providers ?? {}
+  const name =
+    requestedProvider && providers[requestedProvider]
+      ? requestedProvider
+      : (getConfiguredProviderNameForModel(model, settings) ??
+        requestedProvider)
+  return (name ? providers[name]?.protocol : undefined) ?? 'openai-responses'
 }
 
 export function getAPIProvider(

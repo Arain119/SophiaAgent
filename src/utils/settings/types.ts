@@ -31,7 +31,9 @@ export const EnvironmentVariablesSchema = lazySchema(() =>
   z.record(z.string(), z.coerce.string()),
 )
 
-export const APIProtocolSchema = lazySchema(() => z.literal('openai-responses'))
+export const APIProtocolSchema = lazySchema(() =>
+  z.enum(['openai-responses', 'anthropic-messages']),
+)
 
 export const ProviderProfileSchema = lazySchema(() =>
   z
@@ -48,7 +50,8 @@ const SUBAGENT_MODELS = ['gpt-5.6-luna', 'deepseek-v4-flash'] as const
 function agentModelRouteSchema(models: readonly [string, ...string[]]) {
   return z
     .object({
-      model: z.enum(models),
+      // Preset IDs stay listed for pickers; any provider's model ID is valid.
+      model: z.union([z.enum(models), z.string().trim().min(1)]),
       provider: z.string().trim().min(1),
     })
     .strict()

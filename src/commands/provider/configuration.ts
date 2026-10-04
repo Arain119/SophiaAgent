@@ -14,7 +14,12 @@ export type ProviderField = 'name' | 'baseUrl' | 'apiKey'
 export type ProviderValues = Record<ProviderField, string>
 
 export type ProviderEnvironmentPatch = Record<
-  'OPENAI_BASE_URL' | 'OPENAI_API_KEY' | 'OPENAI_MODEL',
+  | 'OPENAI_BASE_URL'
+  | 'OPENAI_API_KEY'
+  | 'OPENAI_MODEL'
+  | 'ANTHROPIC_BASE_URL'
+  | 'ANTHROPIC_API_KEY'
+  | 'ANTHROPIC_MODEL',
   string | undefined
 >
 
@@ -51,6 +56,9 @@ export function emptyProviderEnvironmentPatch(): ProviderEnvironmentPatch {
     OPENAI_BASE_URL: undefined,
     OPENAI_API_KEY: undefined,
     OPENAI_MODEL: undefined,
+    ANTHROPIC_BASE_URL: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_MODEL: undefined,
   }
 }
 
@@ -63,6 +71,7 @@ export function hasSavedProviderConfiguration(
 export function prepareProviderConfiguration(
   values: ProviderValues,
   existingApiKey = '',
+  existingProfile?: ProviderProfile,
 ): PreparedProviderConfiguration | Error {
   const name = values.name.trim()
   const baseUrl = values.baseUrl.trim().replace(/\/+$/, '')
@@ -88,7 +97,9 @@ export function prepareProviderConfiguration(
   if (requiresApiKey && !apiKey) return new Error('API Key is required')
 
   const profile: ProviderProfile = {
-    protocol: 'openai-responses',
+    // The form only creates openai-responses providers; when editing, keep the
+    // stored protocol so a hand-configured profile is not silently rewritten.
+    protocol: existingProfile?.protocol ?? 'openai-responses',
     baseUrl,
   }
   return {
@@ -178,7 +189,14 @@ export function saveProviderConfiguration(
   const previousApiKey = previousName
     ? dependencies.getApiKey(previousName)
     : undefined
-  const prepared = prepareProviderConfiguration(values, previousApiKey)
+  const previousProfile = previousName
+    ? dependencies.getSettings()?.providers?.[previousName]
+    : undefined
+  const prepared = prepareProviderConfiguration(
+    values,
+    previousApiKey,
+    previousProfile,
+  )
   if (prepared instanceof Error) return prepared
 
   const providers = {
